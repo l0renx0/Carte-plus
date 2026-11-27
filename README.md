@@ -14,10 +14,11 @@ Web-app per salvare le carte fedeltà sul telefono e mostrarle alla cassa.
 ## Pubblicazione (una volta sola)
 L'app è un sito statico: serve solo un indirizzo **https** (necessario per fotocamera e modalità offline).
 
-Con GitHub Pages:
-1. Unisci questo branch in `main`.
-2. Su GitHub: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-3. Il workflow `.github/workflows/pages.yml` pubblica l'app su `https://<utente>.github.io/carte-plus/`.
+Pubblicata con GitHub Pages direttamente dal branch `main`
+(**Settings → Pages → Source: Deploy from a branch → main / (root)**):
+https://l0renx0.github.io/Carte-plus/
+
+Ogni modifica caricata su `main` viene pubblicata da sola in 1–2 minuti.
 
 > Su un repository privato GitHub Pages richiede un piano a pagamento; in alternativa vanno bene Netlify, Cloudflare Pages o Vercel (basta caricare la cartella così com'è).
 
