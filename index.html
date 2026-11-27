@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="it" data-version="1.2.0">
+<html lang="it" data-version="1.2.1">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -190,7 +190,7 @@
       <p class="error" id="form-error" role="alert" hidden></p>
 
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary btn-big">Salva carta</button>
+        <button type="submit" class="btn btn-primary btn-big" id="btn-save">Salva carta</button>
       </div>
     </form>
   </section>
@@ -297,7 +297,7 @@
   <script>
     /* Controllo di sicurezza: se il telefono ha tenuto file di versioni diverse,
        li butta e ricarica la versione giusta (una sola volta, e solo con internet). */
-    window.CARTE_VERSION = '1.2.0';
+    window.CARTE_VERSION = '1.2.1';
     window.carteRepair = function () {
       try { if (sessionStorage.getItem('carte-repair')) return false; sessionStorage.setItem('carte-repair', '1'); } catch (e) { return false; }
       if (!navigator.onLine) return false;

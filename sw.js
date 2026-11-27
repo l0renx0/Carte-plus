@@ -1,5 +1,5 @@
 /* Service worker: salva tutta l'app sul telefono così funziona senza internet. */
-const CACHE = 'carteplus-v1.2.0';
+const CACHE = 'carteplus-v1.2.1';
 const FILES = [
   './',
   'index.html',

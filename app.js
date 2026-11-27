@@ -1,7 +1,7 @@
 /* Carte+ — carte fedeltà offline. Tutto resta sul telefono (IndexedDB). */
 'use strict';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 
 /* =========================================================
  * Archivio (IndexedDB)
@@ -32,11 +32,16 @@ const DB = (() => {
       req.onblocked = () => {
         setTimeout(() => { if (!settled) toast('Chiudi le altre finestre di Carte+ e riapri l\'app. Le tue carte sono al sicuro.', { ms: 15000 }); }, 1500);
       };
+      // Mai restare appesi: se l'archivio non risponde, si passa all'archivio di riserva.
+      setTimeout(() => { if (!settled) { settled = true; reject(new Error('archivio-non-risponde')); } }, 4000);
     });
   }
 
+  let downUntil = 0; // se l'archivio non risponde, per un po' non lo si aspetta più
+
   function open() {
     if (dbp) return dbp;
+    if (Date.now() < downUntil) return Promise.reject(new Error('archivio-non-disponibile'));
     dbp = (async () => {
       let db = await openRaw();
       // Caso rarissimo: archivio senza la tabella delle carte -> la crea.
@@ -51,7 +56,7 @@ const DB = (() => {
       db.onclose = () => { dbp = null; };
       return db;
     })();
-    dbp.catch(() => { dbp = null; });
+    dbp.catch(() => { dbp = null; downUntil = Date.now() + 20000; });
     return dbp;
   }
 
@@ -126,6 +131,39 @@ const DB = (() => {
     }),
   };
 })();
+
+/* =========================================================
+ * Archivio di riserva (localStorage)
+ * Ogni carta (senza foto) viene salvata ANCHE qui. Se l'archivio principale
+ * non funziona, le carte si salvano e si vedono comunque, e vengono copiate
+ * nell'archivio principale appena torna disponibile.
+ * ======================================================= */
+const Mirror = (() => {
+  const KEY = 'carteplus.cards.v1';
+  const strip = c => { const x = { ...c }; delete x.photo; return x; };
+  function read() {
+    try {
+      const list = JSON.parse(localStorage.getItem(KEY) || '[]');
+      return Array.isArray(list) ? list.filter(c => c && c.id && c.name && c.code) : [];
+    } catch (_) { return []; }
+  }
+  function write(list) {
+    try { localStorage.setItem(KEY, JSON.stringify(list.map(strip))); return true; } catch (_) { return false; }
+  }
+  return {
+    read,
+    write,
+    put(card) { return write(read().filter(c => c.id !== card.id).concat([card])); },
+    remove(id) { return write(read().filter(c => c.id !== id)); },
+  };
+})();
+
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('tempo-scaduto')), ms))]);
+}
+function errText(e) {
+  return (e && (e.name && e.name !== 'Error' ? e.name : e.message)) || 'errore sconosciuto';
+}
 
 /* =========================================================
  * Utilità
@@ -556,8 +594,28 @@ function goHome() {
 /* =========================================================
  * HOME: elenco carte
  * ======================================================= */
+/* Unisce archivio principale e archivio di riserva (vince la modifica più recente). */
 async function loadCards() {
-  state.cards = (await DB.all()).sort((a, b) => a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
+  let fromDb = [];
+  let dbOk = true;
+  try { fromDb = await withTimeout(DB.all(), 5000); } catch (e) { dbOk = false; state.dbError = e; }
+  const map = new Map(fromDb.map(c => [c.id, c]));
+  const toHeal = [];
+  for (const c of Mirror.read()) {
+    const cur = map.get(c.id);
+    if (!cur || (c.updated || 0) > (cur.updated || 0)) {
+      map.set(c.id, cur ? { ...c, hasPhoto: cur.hasPhoto } : c);
+      toHeal.push(map.get(c.id));
+    }
+  }
+  state.cards = [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
+  Mirror.write(state.cards);
+  if (dbOk && toHeal.length) {
+    // Copia nell'archivio principale le carte salvate solo in quello di riserva.
+    for (const c of toHeal) { try { await DB.put(c); } catch (_) { break; } }
+  }
+  if (!dbOk && !state.cards.length) throw state.dbError;
+  return dbOk;
 }
 
 function tileFor(c) {
@@ -618,7 +676,7 @@ function formatCodeForReading(code) {
 }
 
 async function openCard(id) {
-  const c = state.cards.find(x => x.id === id) || await DB.get(id);
+  const c = state.cards.find(x => x.id === id) || await DB.get(id).catch(() => null);
   if (!c) return;
   state.current = c;
   $('#show-title').textContent = c.name;
@@ -650,8 +708,9 @@ async function toggleFav() {
   c.fav = !c.fav;
   setFavButton(c.fav);
   vibrate(15);
-  await DB.put(c);
-  await loadCards();
+  Mirror.put(c);
+  try { await withTimeout(DB.put(c), 5000); } catch (_) {}
+  try { await loadCards(); } catch (_) {}
   toast(c.fav ? '⭐ Aggiunta alle preferite' : 'Tolta dalle preferite');
 }
 
@@ -835,27 +894,44 @@ async function saveForm(ev) {
     created: state.editing ? state.editing.created : now,
     updated: now,
   };
+  const btn = $('#btn-save');
+  btn.disabled = true;
+  btn.textContent = 'Salvataggio…';
   try {
-    await DB.put(card, state.formPhoto);
-  } catch (e) {
-    // Un secondo tentativo risolve i casi in cui l'archivio era stato chiuso dal sistema.
-    try {
-      await new Promise(r => setTimeout(r, 400));
-      await DB.put(card, state.formPhoto);
-    } catch (e2) {
-      const full = e2 && (e2.name === 'QuotaExceededError');
+    // 1) copia di riserva, istantanea
+    const mirrored = Mirror.put(card);
+    // 2) archivio principale (con un secondo tentativo)
+    let dbErr = null;
+    for (let i = 0; i < 2; i++) {
+      try { await withTimeout(DB.put(card, state.formPhoto), 4500); dbErr = null; break; }
+      catch (e) {
+        dbErr = e;
+        // Se la copia di riserva c'è già, non si fa aspettare l'utente.
+        if (mirrored || /non-disponibile|non-risponde|tempo-scaduto/.test(e.message || '')) break;
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+    if (dbErr && !mirrored) {
+      const full = dbErr.name === 'QuotaExceededError';
       return fail(full
         ? 'Memoria del telefono piena: libera un po\' di spazio e riprova.'
-        : 'Non sono riuscito a salvare. Chiudi del tutto l\'app, riaprila e riprova.');
+        : `Non sono riuscito a salvare (${errText(dbErr)}, v${APP_VERSION}). Chiudi del tutto l'app, riaprila e riprova.`);
     }
+    const wasEditing = !!state.editing;
+    try { await loadCards(); } catch (_) {}
+    if (!state.cards.some(c => c.id === card.id)) state.cards.push(card);
+    vibrate(30);
+    const noPhoto = dbErr && typeof state.formPhoto === 'string';
+    toast((wasEditing ? 'Carta aggiornata ✔' : 'Carta salvata ✔') + (noPhoto ? ' (la foto non è stata salvata)' : ''));
+    // Dopo il salvataggio mostra subito la carta (Indietro riporta alla home).
+    state.stack = ['home'];
+    openCard(card.id);
+  } catch (e) {
+    fail(`Errore nel salvataggio (${errText(e)}, v${APP_VERSION}).`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Salva carta';
   }
-  const wasEditing = !!state.editing;
-  await loadCards();
-  vibrate(30);
-  toast(wasEditing ? 'Carta aggiornata ✔' : 'Carta salvata ✔');
-  // Dopo il salvataggio mostra subito la carta (Indietro riporta alla home).
-  state.stack = ['home'];
-  openCard(card.id);
 }
 
 /* =========================================================
@@ -927,9 +1003,10 @@ function setLastBackup() { try { localStorage.setItem('carteplus.lastBackup', St
 function getLastBackup() { try { return Number(localStorage.getItem('carteplus.lastBackup')) || 0; } catch (_) { return 0; } }
 
 async function exportBackup() {
-  const cards = await DB.all();
+  try { await loadCards(); } catch (_) {}
+  const cards = state.cards;
   if (!cards.length) { toast('Non ci sono carte da salvare.'); return; }
-  const photos = await DB.allPhotos();
+  const photos = await withTimeout(DB.allPhotos(), 5000).catch(() => new Map());
   const full = cards.map(c => ({ ...c, photo: photos.get(c.id) || null }));
   const data = JSON.stringify({ app: 'carteplus', version: 2, exported: new Date().toISOString(), cards: full });
   const d = new Date();
@@ -961,7 +1038,7 @@ async function importBackup(file) {
     for (const c of cards) {
       if (!c || !c.name || !c.code) continue;
       const photo = typeof c.photo === 'string' && c.photo.startsWith('data:image/') ? c.photo : null;
-      await DB.put({
+      const card = {
         id: typeof c.id === 'string' ? c.id : uid(),
         name: String(c.name).slice(0, 40),
         code: String(c.code),
@@ -971,10 +1048,12 @@ async function importBackup(file) {
         fav: !!c.fav,
         created: Number(c.created) || Date.now(),
         updated: Number(c.updated) || Date.now(),
-      }, photo);
+      };
+      Mirror.put(card);
+      try { await withTimeout(DB.put(card, photo), 5000); } catch (_) {}
       n++;
     }
-    await loadCards();
+    try { await loadCards(); } catch (_) {}
     renderList();
     updateStorageHint();
     updateSettingsInfo();
@@ -1083,16 +1162,19 @@ function bind() {
     const c = state.current;
     if (!c) return;
     if (!(await confirmDialog(`Eliminare la carta "${c.name}"?`))) return;
-    const photo = c.hasPhoto ? await DB.photo(c.id).catch(() => null) : null;
-    await DB.remove(c.id);
-    await loadCards();
+    const photo = c.hasPhoto ? await withTimeout(DB.photo(c.id), 4000).catch(() => null) : null;
+    Mirror.remove(c.id);
+    try { await withTimeout(DB.remove(c.id), 5000); } catch (_) {}
+    state.cards = state.cards.filter(x => x.id !== c.id);
+    try { await loadCards(); } catch (_) {}
     goHome();
     toast('Carta eliminata', {
       ms: 6000,
       action: 'Annulla',
       onAction: async () => {
-        await DB.put(c, photo);
-        await loadCards();
+        Mirror.put(c);
+        try { await withTimeout(DB.put(c, photo), 5000); } catch (_) {}
+        try { await loadCards(); } catch (_) {}
         renderList();
         toast('Carta ripristinata ✔');
       },
@@ -1137,6 +1219,7 @@ async function refreshCards() {
     renderList();
     return true;
   } catch (e) {
+    console.error(e);
     // Non mostrare "nessuna carta": le carte ci sono, solo non si riescono a leggere ora.
     renderList();
     $('#empty').hidden = true;
@@ -1155,7 +1238,13 @@ function setupServiceWorker() {
     if (state.stack.length === 1 && $('#zoom').hidden) { reloaded = true; location.reload(); }
   });
   navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
-    .then(reg => { if (navigator.onLine) reg.update().catch(() => {}); })
+    .then(reg => {
+      if (navigator.onLine) reg.update().catch(() => {});
+      // Anche quando l'app torna in primo piano (su Android spesso non si riavvia da zero).
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && navigator.onLine) reg.update().catch(() => {});
+      });
+    })
     .catch(() => {});
 }
 
@@ -1188,6 +1277,16 @@ async function init() {
 
   setupServiceWorker();
 }
+
+/* Se succede un errore imprevisto, lo dice (così si può capire cosa non va). */
+let lastErrShown = 0;
+function reportError(msg) {
+  if (Date.now() - lastErrShown < 4000) return;
+  lastErrShown = Date.now();
+  toast(`Si è verificato un problema (${String(msg).slice(0, 80)}, v${APP_VERSION}).`, { ms: 7000 });
+}
+window.addEventListener('error', e => reportError(e.message || 'errore'));
+window.addEventListener('unhandledrejection', e => reportError(errText(e.reason)));
 
 init().catch(err => {
   // Se qualcosa va storto all'avvio, prova a sistemare da sola (una volta).
