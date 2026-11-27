@@ -1,48 +1,81 @@
 /* Carte+ — carte fedeltà offline. Tutto resta sul telefono (IndexedDB). */
 'use strict';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 
 /* =========================================================
  * Archivio (IndexedDB)
+ *  - "cards": dati leggeri delle carte (elenco veloce)
+ *  - "photos": foto, caricate solo quando servono
  * ======================================================= */
 const DB = (() => {
-  const NAME = 'carteplus';
-  const STORE = 'cards';
   let dbp = null;
+  const reqP = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
 
   function open() {
     if (dbp) return dbp;
     dbp = new Promise((resolve, reject) => {
-      const req = indexedDB.open(NAME, 1);
-      req.onupgradeneeded = () => {
+      const req = indexedDB.open('carteplus', 2);
+      req.onupgradeneeded = ev => {
         const db = req.result;
-        if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('cards')) db.createObjectStore('cards', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' });
+        // v1 -> v2: sposta le foto fuori dalle carte.
+        if (ev.oldVersion === 1) {
+          const t = req.transaction;
+          const cards = t.objectStore('cards');
+          const photos = t.objectStore('photos');
+          cards.openCursor().onsuccess = e => {
+            const cur = e.target.result;
+            if (!cur) return;
+            const c = cur.value;
+            if (c.photo) {
+              photos.put({ id: c.id, data: c.photo });
+              c.hasPhoto = true;
+              delete c.photo;
+              cur.update(c);
+            }
+            cur.continue();
+          };
+        }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
     return dbp;
   }
-  async function tx(mode, fn) {
+
+  async function run(stores, mode, fn) {
     const db = await open();
     return new Promise((resolve, reject) => {
-      const t = db.transaction(STORE, mode);
-      const store = t.objectStore(STORE);
+      const t = db.transaction(stores, mode);
       let result;
-      Promise.resolve(fn(store)).then(r => { result = r; });
+      Promise.resolve(fn(t)).then(r => { result = r; });
       t.oncomplete = () => resolve(result);
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error);
     });
   }
-  const reqP = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
 
   return {
-    all: () => tx('readonly', s => reqP(s.getAll())),
-    get: id => tx('readonly', s => reqP(s.get(id))),
-    put: card => tx('readwrite', s => { s.put(card); }),
-    remove: id => tx('readwrite', s => { s.delete(id); }),
+    all: () => run('cards', 'readonly', t => reqP(t.objectStore('cards').getAll())),
+    get: id => run('cards', 'readonly', t => reqP(t.objectStore('cards').get(id))),
+    photo: id => run('photos', 'readonly', t => reqP(t.objectStore('photos').get(id))).then(r => (r ? r.data : null)),
+    allPhotos: () => run('photos', 'readonly', t => reqP(t.objectStore('photos').getAll())),
+    /* photo: stringa = salva, null = elimina, undefined = lascia com'è */
+    put: (card, photo) => run(['cards', 'photos'], 'readwrite', t => {
+      const c = { ...card };
+      if (photo !== undefined) {
+        if (photo) { t.objectStore('photos').put({ id: c.id, data: photo }); c.hasPhoto = true; }
+        else { t.objectStore('photos').delete(c.id); c.hasPhoto = false; }
+      }
+      delete c.photo;
+      t.objectStore('cards').put(c);
+    }),
+    remove: id => run(['cards', 'photos'], 'readwrite', t => {
+      t.objectStore('cards').delete(id);
+      t.objectStore('photos').delete(id);
+    }),
   };
 })();
 
@@ -50,36 +83,69 @@ const DB = (() => {
  * Utilità
  * ======================================================= */
 const $ = sel => document.querySelector(sel);
-const COLORS = ['#c62828', '#e65100', '#f9a825', '#2e7d32', '#00838f', '#1f4e8c', '#6a1b9a', '#ad1457', '#4e342e', '#37474f', '#000000', '#e0e0e0'];
 
-const STORES = ['Conad', 'Coop', 'Esselunga', 'Carrefour', 'Lidl', 'Eurospin', 'Pam', 'Despar', 'Interspar', 'Eurospar',
-  'Famila', 'Bennet', 'Iper', 'Il Gigante', 'Iperal', 'Unes', 'Tigros', 'Crai', 'Sigma', 'Sisa', 'Penny', 'MD', 'Todis',
-  'Tuodì', 'Ali', 'Basko', 'Decò', 'Tigotà', 'Acqua & Sapone', 'Caddy\'s', 'Douglas', 'Sephora', 'Kiko', 'Feltrinelli',
-  'Mondadori', 'MediaWorld', 'Unieuro', 'Euronics', 'Expert', 'Trony', 'Decathlon', 'IKEA Family', 'Leroy Merlin',
-  'Brico', 'OBI', 'Bricocenter', 'OVS', 'Coin', 'Upim', 'Zara', 'H&M', 'Calzedonia', 'Intimissimi', 'Tezenis', 'Yamamay',
-  'Pittarello', 'Arcaplanet', 'Maxi Zoo', 'Farmacia', 'Eni', 'Q8', 'IP', 'Esso', 'Tamoil', 'Autogrill', 'Trenitalia',
-  'Italo', 'Ryanair', 'ITA Airways', 'Biblioteca', 'Palestra', 'Benzinaio', 'Bar', 'Edicola', 'Ottico'];
+const COLORS = ['#d32f2f', '#ef6c00', '#f6b400', '#2e7d32', '#00897b', '#0277bd',
+  '#1f4e8c', '#5e35b1', '#c2185b', '#6d4c41', '#455a64', '#111111'];
+
+/* Negozi suggeriti; alcuni con il loro colore tipico. */
+const STORES = [
+  ['Conad', '#e30613'], ['Coop', '#e2001a'], ['Esselunga'], ['Carrefour', '#004e9f'], ['Lidl', '#0050aa'],
+  ['Eurospin', '#00439c'], ['Pam'], ['Despar', '#00843d'], ['Interspar', '#00843d'], ['Eurospar', '#00843d'],
+  ['Famila'], ['Bennet'], ['Iper'], ['Il Gigante'], ['Iperal'], ['Unes'], ['Tigros'], ['Crai'], ['Sigma'],
+  ['Sisa'], ['Penny', '#cd1316'], ['MD'], ['Todis'], ['Tuodì'], ['Basko'], ['Decò'], ['Tigotà'],
+  ['Acqua & Sapone'], ['Caddy\'s'], ['Douglas'], ['Sephora', '#111111'], ['Kiko'], ['Feltrinelli'],
+  ['Mondadori'], ['MediaWorld', '#df0000'], ['Unieuro'], ['Euronics'], ['Expert'], ['Trony'],
+  ['Decathlon', '#0082c3'], ['IKEA Family', '#0058a3'], ['Leroy Merlin', '#78be20'], ['Brico'], ['OBI', '#ff7e21'],
+  ['Bricocenter'], ['OVS'], ['Coin'], ['Upim'], ['Calzedonia'], ['Intimissimi'], ['Tezenis'], ['Yamamay'],
+  ['Pittarello'], ['Arcaplanet'], ['Maxi Zoo'], ['Farmacia', '#2e7d32'], ['Eni'], ['Q8'], ['IP'], ['Esso'],
+  ['Tamoil'], ['Autogrill'], ['Trenitalia'], ['Italo'], ['Biblioteca'], ['Palestra'], ['Ottico'],
+];
+const STORE_COLOR = new Map(STORES.filter(s => s[1]).map(([n, c]) => [n.toLowerCase(), c]));
+const POPULAR = ['Conad', 'Coop', 'Esselunga', 'Carrefour', 'Lidl', 'Eurospin', 'Despar', 'Pam'];
 
 function uid() {
   return (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 }
 function colorFor(name) {
+  const known = STORE_COLOR.get((name || '').trim().toLowerCase());
+  if (known) return known;
   let h = 0;
   for (const ch of name || '') h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return COLORS[h % (COLORS.length - 2)];
+  return COLORS[h % (COLORS.length - 1)];
 }
 function isLight(hex) {
-  const n = parseInt(hex.slice(1), 16);
+  const n = parseInt((hex || '#000000').slice(1), 16);
   const r = n >> 16, g = (n >> 8) & 255, b = n & 255;
-  return (0.299 * r + 0.587 * g + 0.114 * b) > 170;
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 175;
 }
-function toast(msg, ms = 2600) {
+function paint(el, color) {
+  el.style.setProperty('--c', color);
+  el.classList.toggle('light-bg', isLight(color));
+}
+function lastDigits(code) {
+  const s = String(code || '').replace(/\s+/g, '');
+  if (s.length <= 4) return s;
+  return '•••• ' + s.slice(-4);
+}
+function norm(s) {
+  return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+function toast(msg, { ms = 2600, action = null, onAction = null } = {}) {
   const t = $('#toast');
-  t.textContent = msg;
+  $('#toast-text').textContent = msg;
+  const btn = $('#toast-action');
+  btn.hidden = !action;
+  btn.textContent = action || '';
+  btn.onclick = action ? () => { t.hidden = true; onAction && onAction(); } : null;
   t.hidden = false;
+  // riavvia l'animazione
+  t.style.animation = 'none'; void t.offsetWidth; t.style.animation = '';
   clearTimeout(toast._t);
   toast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
+function hideToast() { $('#toast').hidden = true; }
+
 function confirmDialog(text, okLabel = 'Elimina') {
   const d = $('#confirm');
   $('#confirm-text').textContent = text;
@@ -93,7 +159,6 @@ function confirmDialog(text, okLabel = 'Elimina') {
 }
 function vibrate(p) { try { navigator.vibrate && navigator.vibrate(p); } catch (_) {} }
 
-/* Riduce una foto per non occupare troppo spazio. */
 function loadImage(file) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -103,32 +168,35 @@ function loadImage(file) {
     img.src = url;
   });
 }
-async function shrinkPhoto(file, max = 1000) {
-  const img = await loadImage(file);
+/* Riduce una foto per non occupare troppo spazio. */
+async function shrinkPhoto(fileOrImg, max = 1000) {
+  const img = fileOrImg instanceof HTMLImageElement ? fileOrImg : await loadImage(fileOrImg);
   const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
   const c = document.createElement('canvas');
   c.width = Math.round(img.naturalWidth * scale);
   c.height = Math.round(img.naturalHeight * scale);
   c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-  return c.toDataURL('image/jpeg', 0.8);
+  return c.toDataURL('image/jpeg', 0.78);
 }
 
 /* =========================================================
  * Disegno del codice a barre
  * ======================================================= */
 const ZXING_TO_FORMAT = {
-  EAN_13: 'EAN13', ean_13: 'EAN13',
-  EAN_8: 'EAN8', ean_8: 'EAN8',
-  UPC_A: 'UPC', upc_a: 'UPC',
-  UPC_E: 'UPCE', upc_e: 'UPCE',
-  CODE_128: 'CODE128', code_128: 'CODE128',
-  CODE_39: 'CODE39', code_39: 'CODE39',
-  CODE_93: 'CODE128', code_93: 'CODE128',
-  ITF: 'ITF', itf: 'ITF',
-  CODABAR: 'codabar', codabar: 'codabar',
-  QR_CODE: 'QR', qr_code: 'QR',
+  EAN_13: 'EAN13', ean_13: 'EAN13', EAN_8: 'EAN8', ean_8: 'EAN8',
+  UPC_A: 'UPC', upc_a: 'UPC', UPC_E: 'UPCE', upc_e: 'UPCE',
+  CODE_128: 'CODE128', code_128: 'CODE128', CODE_39: 'CODE39', code_39: 'CODE39',
+  CODE_93: 'CODE128', code_93: 'CODE128', ITF: 'ITF', itf: 'ITF',
+  CODABAR: 'codabar', codabar: 'codabar', QR_CODE: 'QR', qr_code: 'QR',
 };
 
+function validEan(code) {
+  const d = code.split('').map(Number);
+  const check = d.pop();
+  let sum = 0;
+  d.reverse().forEach((n, i) => { sum += n * (i % 2 === 0 ? 3 : 1); });
+  return (10 - (sum % 10)) % 10 === check;
+}
 /* Indovina il formato più probabile dal solo numero. */
 function guessFormat(code) {
   if (/^\d{13}$/.test(code) && validEan(code)) return 'EAN13';
@@ -137,56 +205,54 @@ function guessFormat(code) {
   if (code.length > 60 || /^https?:\/\//i.test(code)) return 'QR';
   return 'CODE128';
 }
-function validEan(code) {
-  const d = code.split('').map(Number);
-  const check = d.pop();
-  let sum = 0;
-  d.reverse().forEach((n, i) => { sum += n * (i % 2 === 0 ? 3 : 1); });
-  return (10 - (sum % 10)) % 10 === check;
-}
 
-/* Disegna il codice dentro `box`. Ritorna il formato effettivamente usato o null. */
-function renderBarcode(box, code, format, opts = {}) {
-  box.innerHTML = '';
-  box.classList.remove('qr');
-  if (!code) return null;
+/* Cache dei disegni già fatti: riaprire una carta è istantaneo. */
+const svgCache = new Map();
+
+function makeBarcodeSvg(code, format, size) {
+  const key = `${size}|${format}|${code}`;
+  if (svgCache.has(key)) return svgCache.get(key);
   let fmt = format && format !== 'auto' ? format : guessFormat(code);
+  let out = null;
 
   if (fmt === 'QR') {
     try {
       const qr = qrcode(0, 'M');
       qr.addData(unescape(encodeURIComponent(code)));
       qr.make();
-      box.innerHTML = qr.createSvgTag({ cellSize: 8, margin: 4, scalable: true });
-      box.classList.add('qr');
-      return 'QR';
-    } catch (e) {
-      return null;
+      out = { html: qr.createSvgTag({ cellSize: 8, margin: 4, scalable: true }), fmt: 'QR' };
+    } catch (_) { out = null; }
+  } else {
+    const dims = { small: [2, 70, 6], large: [3, 150, 16], zoom: [3, 100, 8] }[size] || [3, 150, 16];
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const settings = {
+      format: fmt, width: dims[0], height: dims[1], displayValue: false,
+      margin: dims[2], background: '#ffffff', lineColor: '#000000',
+    };
+    try {
+      JsBarcode(svg, code, settings);
+      out = { html: svg.outerHTML, fmt };
+    } catch (_) {
+      // Numero non compatibile col formato: ripiega su Code 128, che accetta tutto.
+      if (fmt !== 'CODE128') {
+        try { JsBarcode(svg, code, { ...settings, format: 'CODE128' }); out = { html: svg.outerHTML, fmt: 'CODE128' }; } catch (__) {}
+      }
     }
   }
+  if (svgCache.size > 60) svgCache.clear();
+  svgCache.set(key, out);
+  return out;
+}
 
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  box.appendChild(svg);
-  const settings = {
-    format: fmt,
-    width: opts.small ? 2 : 3,
-    height: opts.small ? 70 : 150,
-    displayValue: false,
-    margin: opts.small ? 6 : 14,
-    background: '#ffffff',
-    lineColor: '#000000',
-  };
-  try {
-    JsBarcode(svg, code, settings);
-    return fmt;
-  } catch (e) {
-    // Formato non compatibile col numero: ripiega su Code 128, che accetta tutto.
-    if (fmt !== 'CODE128') {
-      try { JsBarcode(svg, code, { ...settings, format: 'CODE128' }); return 'CODE128'; } catch (_) {}
-    }
-    box.innerHTML = '';
-    return null;
-  }
+/* Disegna il codice dentro `box`. Ritorna il formato effettivamente usato o null. */
+function renderBarcode(box, code, format, size = 'large') {
+  box.classList.remove('qr');
+  if (!code) { box.innerHTML = ''; return null; }
+  const r = makeBarcodeSvg(code, format, size);
+  if (!r) { box.innerHTML = ''; return null; }
+  box.innerHTML = r.html;
+  box.classList.toggle('qr', r.fmt === 'QR');
+  return r.fmt;
 }
 
 /* =========================================================
@@ -200,6 +266,7 @@ const Scanner = (() => {
   let canvas = null;
   let onFound = null;
   let timer = null;
+  let frame = 0;
 
   const NATIVE_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'itf', 'codabar', 'qr_code'];
 
@@ -232,8 +299,8 @@ const Scanner = (() => {
   async function getZxReader() {
     if (zxReader) return zxReader;
     const ZX = await loadZxing();
-    const hints = new Map();
     const F = ZX.BarcodeFormat;
+    const hints = new Map();
     hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS, [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.CODE_93, F.ITF, F.CODABAR, F.QR_CODE]);
     hints.set(ZX.DecodeHintType.TRY_HARDER, true);
     zxReader = new ZX.MultiFormatReader();
@@ -245,8 +312,7 @@ const Scanner = (() => {
     const ZX = window.ZXing;
     try {
       const src = new ZX.HTMLCanvasElementLuminanceSource(c);
-      const bmp = new ZX.BinaryBitmap(new ZX.HybridBinarizer(src));
-      const r = zxReader.decode(bmp);
+      const r = zxReader.decode(new ZX.BinaryBitmap(new ZX.HybridBinarizer(src)));
       return { code: r.getText(), format: ZXING_TO_FORMAT[ZX.BarcodeFormat[r.getBarcodeFormat()]] || 'CODE128' };
     } catch (_) {
       return null;
@@ -255,68 +321,87 @@ const Scanner = (() => {
     }
   }
 
-  /* Prova a leggere un codice da un'immagine/canvas/video. */
-  async function decodeSource(source, w, h) {
-    const det = await getDetector();
-    if (det) {
-      try {
-        const res = await det.detect(source);
-        if (res && res.length) {
-          return { code: res[0].rawValue, format: ZXING_TO_FORMAT[res[0].format] || 'CODE128' };
-        }
-      } catch (_) {}
-      return null;
-    }
-    await getZxReader();
+  /* Copia (una parte di) source su canvas, rimpicciolendo se serve, e decodifica con ZXing. */
+  function zxDecodeRegion(source, sx, sy, sw, sh, maxSide) {
     if (!canvas) canvas = document.createElement('canvas');
-    const scale = Math.min(1, 1280 / Math.max(w, h));
-    canvas.width = Math.round(w * scale);
-    canvas.height = Math.round(h * scale);
+    const scale = Math.min(1, maxSide / Math.max(sw, sh));
+    canvas.width = Math.max(1, Math.round(sw * scale));
+    canvas.height = Math.max(1, Math.round(sh * scale));
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     return zxDecodeCanvas(canvas);
+  }
+
+  async function nativeDetect(source) {
+    try {
+      const res = await detector.detect(source);
+      if (res && res.length) return { code: res[0].rawValue, format: ZXING_TO_FORMAT[res[0].format] || 'CODE128' };
+    } catch (_) {}
+    return null;
+  }
+
+  async function decodeImage(source, w, h) {
+    if (await getDetector()) return nativeDetect(source);
+    await getZxReader();
+    return zxDecodeRegion(source, 0, 0, w, h, 1600);
   }
 
   async function decodeFile(file) {
     const img = await loadImage(file);
     const w = img.naturalWidth, h = img.naturalHeight;
-    let r = await decodeSource(img, w, h);
-    if (r) return r;
-    // Riprova con l'immagine ruotata di 90° (foto in verticale).
-    const c = document.createElement('canvas');
-    const scale = Math.min(1, 1600 / Math.max(w, h));
-    c.width = Math.round(h * scale);
-    c.height = Math.round(w * scale);
-    const ctx = c.getContext('2d');
-    ctx.translate(c.width / 2, c.height / 2);
-    ctx.rotate(Math.PI / 2);
-    ctx.drawImage(img, -w * scale / 2, -h * scale / 2, w * scale, h * scale);
-    r = await decodeSource(c, c.width, c.height);
-    return r;
+    let r = await decodeImage(img, w, h);
+    if (!r) {
+      // Riprova con l'immagine ruotata di 90° (codice in verticale).
+      const c = document.createElement('canvas');
+      const scale = Math.min(1, 1600 / Math.max(w, h));
+      c.width = Math.round(h * scale);
+      c.height = Math.round(w * scale);
+      const ctx = c.getContext('2d');
+      ctx.translate(c.width / 2, c.height / 2);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(img, -w * scale / 2, -h * scale / 2, w * scale, h * scale);
+      r = await decodeImage(c, c.width, c.height);
+    }
+    return r ? { ...r, img } : { img };
   }
 
   async function start(video, cb) {
     onFound = cb;
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      throw new Error('nocamera');
-    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('nocamera');
     stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
     });
+    // Messa a fuoco continua dove supportata.
+    try {
+      const track = stream.getVideoTracks()[0];
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps.focusMode && caps.focusMode.includes('continuous')) await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+    } catch (_) {}
     video.srcObject = stream;
     await video.play().catch(() => {});
-    // Pre-carica il lettore se non c'è quello nativo.
     if (!(await getDetector())) await getZxReader();
     running = true;
+    frame = 0;
     loop(video);
     return stream;
+  }
+
+  /* Su iPhone (senza lettore nativo) analizza soprattutto la fascia centrale:
+     meno pixel = lettura molto più rapida. Ogni tanto prova l'immagine intera. */
+  async function decodeVideo(video) {
+    const w = video.videoWidth, h = video.videoHeight;
+    if (await getDetector()) return nativeDetect(video);
+    frame++;
+    if (frame % 4 === 0) return zxDecodeRegion(video, 0, 0, w, h, 1000);
+    const bandH = Math.round(h * 0.45);
+    return zxDecodeRegion(video, Math.round(w * 0.04), Math.round((h - bandH) / 2), Math.round(w * 0.92), bandH, 1100);
   }
 
   async function loop(video) {
     if (!running) return;
     if (video.readyState >= 2 && video.videoWidth) {
-      const r = await decodeSource(video, video.videoWidth, video.videoHeight);
+      const r = await decodeVideo(video);
       if (r && r.code && running) {
         const cb = onFound;
         stop();
@@ -324,7 +409,9 @@ const Scanner = (() => {
         return;
       }
     }
-    timer = setTimeout(() => loop(video), 120);
+    if (!running) return;
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => { timer = setTimeout(() => loop(video), 40); });
+    else timer = setTimeout(() => loop(video), 90);
   }
 
   function stop() {
@@ -346,7 +433,10 @@ const Scanner = (() => {
     return !!caps.torch;
   }
 
-  return { start, stop, decodeFile, torch, hasTorch };
+  /* Prepara il lettore in anticipo (mentre l'utente sceglie). */
+  function warmUp() { getDetector().then(d => { if (!d) loadZxing().catch(() => {}); }); }
+
+  return { start, stop, decodeFile, torch, hasTorch, warmUp };
 })();
 
 /* =========================================================
@@ -356,9 +446,10 @@ const state = {
   cards: [],
   current: null,      // carta mostrata
   editing: null,      // carta in modifica (o null per nuova)
-  formPhoto: null,    // dataURL foto nel modulo
+  formPhoto: undefined, // undefined = invariata, null = rimossa, stringa = nuova
+  formPhotoShown: null,
   formColor: null,
-  formFormat: 'auto', // formato rilevato dalla scansione
+  colorTouched: false,
   stack: ['home'],
 };
 
@@ -369,8 +460,10 @@ function activate(view) {
   const prev = document.querySelector('.view.active');
   const prevId = prev ? prev.id.replace('view-', '') : null;
   if (prevId === 'scan' && view !== 'scan') Scanner.stop();
-  if (prevId === 'show' && view !== 'show') releaseWakeLock();
-  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
+  if (prevId === 'show' && view !== 'show') { releaseWakeLock(); closeZoom(); }
+  if (prevId !== view) {
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
+  }
   if (view === 'home') renderList();
   window.scrollTo(0, 0);
 }
@@ -398,7 +491,12 @@ function back() {
 window.addEventListener('popstate', () => {
   extraEntry = false;
   if (ignorePop) { ignorePop = false; return; }
-  popView();
+  // Il tasto Indietro chiude prima il codice ingrandito.
+  if (!$('#zoom').hidden) {
+    closeZoom();
+  } else {
+    popView();
+  }
   if (state.stack.length > 1) { history.pushState({ carte: 1 }, ''); extraEntry = true; }
 });
 function goHome() {
@@ -414,36 +512,40 @@ async function loadCards() {
   state.cards = (await DB.all()).sort((a, b) => a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
 }
 
+function tileFor(c) {
+  const b = document.createElement('button');
+  b.className = 'card-tile';
+  paint(b, c.color);
+  b.setAttribute('role', 'listitem');
+  b.setAttribute('aria-label', 'Mostra carta ' + c.name);
+  b.dataset.id = c.id;
+  b.innerHTML = `${c.fav ? '<span class="tile-star" aria-hidden="true">⭐</span>' : ''}<span class="tile-name"></span>
+    <span class="tile-foot"><span class="tile-digits"></span><span class="tile-chip" aria-hidden="true"></span></span>`;
+  b.querySelector('.tile-name').textContent = c.name;
+  b.querySelector('.tile-digits').textContent = lastDigits(c.code);
+  return b;
+}
+
 function renderList() {
-  const list = $('#card-list');
-  const q = ($('#search').value || '').trim().toLowerCase();
-  const cards = q ? state.cards.filter(c => c.name.toLowerCase().includes(q) || (c.notes || '').toLowerCase().includes(q)) : state.cards;
-  list.innerHTML = '';
-  $('#empty').hidden = state.cards.length > 0;
-  $('#search-wrap').hidden = state.cards.length < 6;
-  for (const c of cards) {
-    const b = document.createElement('button');
-    b.className = 'card-tile' + (isLight(c.color) ? ' light-bg' : '');
-    b.style.background = c.color;
-    b.setAttribute('role', 'listitem');
-    b.setAttribute('aria-label', 'Mostra carta ' + c.name);
-    const init = document.createElement('span');
-    init.className = 'tile-initial';
-    init.textContent = c.name.trim().charAt(0).toUpperCase();
-    const nm = document.createElement('span');
-    nm.className = 'tile-name';
-    nm.textContent = c.name;
-    b.append(init, nm);
-    b.addEventListener('click', () => openCard(c.id));
-    list.appendChild(b);
-  }
-  if (q && !cards.length) {
-    const p = document.createElement('p');
-    p.className = 'muted';
-    p.style.gridColumn = '1 / -1';
-    p.textContent = 'Nessuna carta trovata.';
-    list.appendChild(p);
-  }
+  const q = norm($('#search').value.trim());
+  const all = state.cards;
+  const cards = q ? all.filter(c => norm(c.name).includes(q) || norm(c.notes).includes(q) || c.code.includes(q)) : all;
+  const favs = q ? [] : cards.filter(c => c.fav);
+  const rest = q ? cards : cards.filter(c => !c.fav);
+
+  const favList = $('#fav-list'), list = $('#card-list');
+  const f1 = document.createDocumentFragment(), f2 = document.createDocumentFragment();
+  favs.forEach(c => f1.appendChild(tileFor(c)));
+  rest.forEach(c => f2.appendChild(tileFor(c)));
+  favList.replaceChildren(f1);
+  list.replaceChildren(f2);
+
+  $('#fav-title').hidden = favs.length === 0;
+  $('#all-title').hidden = favs.length === 0 || rest.length === 0;
+  $('#no-results').hidden = !(q && cards.length === 0);
+  $('#empty').hidden = all.length > 0;
+  $('#search-wrap').hidden = all.length < 6;
+  $('#home-count').textContent = all.length === 0 ? '' : all.length === 1 ? '1 carta' : `${all.length} carte`;
 }
 
 /* =========================================================
@@ -451,7 +553,7 @@ function renderList() {
  * ======================================================= */
 let wakeLock = null;
 async function requestWakeLock() {
-  try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
+  try { if ('wakeLock' in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } } catch (_) {}
 }
 function releaseWakeLock() {
   try { wakeLock && wakeLock.release(); } catch (_) {}
@@ -461,27 +563,74 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && $('#view-show').classList.contains('active')) requestWakeLock();
 });
 
-async function openCard(id) {
-  const c = await DB.get(id);
-  if (!c) return;
-  state.current = c;
-  $('#show-title').textContent = c.name;
-  $('#show-band').style.background = c.color;
-  const used = renderBarcode($('#show-barcode'), c.code, c.format);
-  if (!used) $('#show-barcode').innerHTML = '<p class="error">Impossibile disegnare il codice. Mostra il numero alla cassa.</p>';
-  $('#show-code').textContent = formatCodeForReading(c.code);
-  $('#show-notes').hidden = !c.notes;
-  $('#show-notes').textContent = c.notes || '';
-  const ph = $('#show-photo');
-  ph.hidden = !c.photo;
-  if (c.photo) ph.src = c.photo; else ph.removeAttribute('src');
-  show('show');
-  requestWakeLock();
-}
 function formatCodeForReading(code) {
   // Raggruppa le cifre a blocchi di 4 per leggerle meglio a voce.
   if (/^\d{9,}$/.test(code)) return code.replace(/(\d{4})(?=\d)/g, '$1 ');
   return code;
+}
+
+async function openCard(id) {
+  const c = state.cards.find(x => x.id === id) || await DB.get(id);
+  if (!c) return;
+  state.current = c;
+  $('#show-title').textContent = c.name;
+  paint($('#show-hero'), c.color);
+  const used = renderBarcode($('#show-barcode'), c.code, c.format);
+  if (!used) $('#show-barcode').innerHTML = '<p class="error">Impossibile disegnare il codice. Detta il numero alla cassa.</p>';
+  $('#show-code').textContent = formatCodeForReading(c.code);
+  $('#show-notes').hidden = !c.notes;
+  $('#show-notes').textContent = c.notes || '';
+  setFavButton(!!c.fav);
+  const ph = $('#show-photo');
+  ph.hidden = true;
+  ph.removeAttribute('src');
+  show('show');
+  requestWakeLock();
+  if (c.hasPhoto) {
+    const data = await DB.photo(c.id).catch(() => null);
+    if (data && state.current && state.current.id === c.id) { ph.src = data; ph.hidden = false; }
+  }
+}
+function setFavButton(on) {
+  const b = $('#btn-fav');
+  b.setAttribute('aria-pressed', String(on));
+  b.setAttribute('aria-label', on ? 'Togli dalle preferite' : 'Metti tra le preferite');
+}
+async function toggleFav() {
+  const c = state.current;
+  if (!c) return;
+  c.fav = !c.fav;
+  setFavButton(c.fav);
+  vibrate(15);
+  await DB.put(c);
+  await loadCards();
+  toast(c.fav ? '⭐ Aggiunta alle preferite' : 'Tolta dalle preferite');
+}
+
+/* Codice a tutto schermo, girato in orizzontale per renderlo più grande. */
+function openZoom() {
+  const c = state.current;
+  if (!c) return;
+  const inner = $('#zoom-inner');
+  const fmt = renderBarcode($('#zoom-code'), c.code, c.format, 'zoom');
+  hideToast();
+  if (!fmt) return;
+  inner.classList.toggle('qr', fmt === 'QR');
+  $('#zoom-num').textContent = formatCodeForReading(c.code);
+  $('#zoom').hidden = false;
+  vibrate(10);
+}
+function closeZoom() { $('#zoom').hidden = true; }
+
+async function copyCode() {
+  const c = state.current;
+  if (!c) return;
+  try {
+    await navigator.clipboard.writeText(c.code);
+    toast('Numero copiato ✔');
+  } catch (_) {
+    toast('Non è stato possibile copiare.');
+  }
 }
 
 /* =========================================================
@@ -493,37 +642,92 @@ function buildColorSwatches() {
   COLORS.forEach(col => {
     const s = document.createElement('button');
     s.type = 'button';
-    s.className = 'swatch';
+    s.className = 'swatch' + (isLight(col) ? ' light' : '');
     s.style.background = col;
     s.setAttribute('role', 'radio');
-    s.setAttribute('aria-label', 'Colore ' + col);
+    s.setAttribute('aria-checked', 'false');
+    s.setAttribute('aria-label', 'Colore ' + (COLORS.indexOf(col) + 1));
     s.dataset.color = col;
-    s.addEventListener('click', () => selectColor(col));
+    s.addEventListener('click', () => { state.colorTouched = true; selectColor(col); });
     wrap.appendChild(s);
   });
 }
 function selectColor(col) {
   state.formColor = col;
   document.querySelectorAll('.swatch').forEach(s => s.setAttribute('aria-checked', String(s.dataset.color === col)));
+  updateCardPreview();
+}
+function currentFormColor() {
+  return state.formColor || colorFor($('#f-name').value.trim());
+}
+function updateCardPreview() {
+  const name = $('#f-name').value.trim();
+  $('#cp-name').textContent = name || 'Nome negozio';
+  $('#cp-digits').textContent = lastDigits($('#f-code').value.trim());
+  paint($('#card-preview'), currentFormColor());
 }
 
-function openForm({ card = null, code = '', format = 'auto', fromScan = false, replace = false } = {}) {
+function renderChips() {
+  const wrap = $('#name-chips');
+  const q = norm($('#f-name').value.trim());
+  let list;
+  if (!q) list = POPULAR.map(n => STORES.find(s => s[0] === n));
+  else list = STORES.filter(([n]) => norm(n).startsWith(q) && norm(n) !== q)
+    .concat(STORES.filter(([n]) => !norm(n).startsWith(q) && norm(n).includes(q)));
+  list = list.slice(0, 6);
+  const frag = document.createDocumentFragment();
+  for (const [n] of list) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip';
+    b.innerHTML = '<i aria-hidden="true"></i>';
+    b.querySelector('i').style.background = colorFor(n);
+    b.append(n);
+    b.addEventListener('click', () => {
+      $('#f-name').value = n;
+      onNameInput();
+      vibrate(10);
+      if (!$('#f-code').value.trim()) $('#f-code').focus();
+    });
+    frag.appendChild(b);
+  }
+  wrap.replaceChildren(frag);
+  wrap.hidden = list.length === 0;
+}
+function onNameInput() {
+  if (!state.colorTouched) {
+    state.formColor = null;
+    document.querySelectorAll('.swatch').forEach(s => s.setAttribute('aria-checked', String(s.dataset.color === colorFor($('#f-name').value.trim()))));
+  }
+  updateCardPreview();
+  renderChips();
+  $('#form-error').hidden = true;
+}
+
+function openForm({ card = null, code = '', format = 'auto', fromScan = false, replace = false, photo } = {}) {
   state.editing = card;
-  $('#form-title').textContent = card ? 'Modifica carta' : 'Dati della carta';
+  $('#form-title').textContent = card ? 'Modifica carta' : 'Nuova carta';
   $('#f-name').value = card ? card.name : '';
   $('#f-code').value = card ? card.code : code;
   $('#f-format').value = card ? (card.format || 'auto') : format;
   $('#f-notes').value = card ? (card.notes || '') : '';
-  state.formPhoto = card ? (card.photo || null) : null;
+  $('#f-fav').checked = card ? !!card.fav : false;
+  state.formPhoto = photo !== undefined ? photo : (card ? undefined : null);
+  state.formPhotoShown = typeof photo === 'string' ? photo : null;
+  state.colorTouched = !!card;
   state.formColor = card ? card.color : null;
   selectColor(state.formColor);
+  onNameInput();
   updatePhotoPreview();
+  if (card && card.hasPhoto) {
+    DB.photo(card.id).then(d => { if (state.editing === card && state.formPhoto === undefined) { state.formPhotoShown = d; updatePhotoPreview(); } }).catch(() => {});
+  }
   $('#scan-ok').hidden = !fromScan;
   $('#form-error').hidden = true;
-  if (fromScan && format !== 'auto') $('#f-format').closest('details').open = false;
+  $('#f-format').closest('details').open = false;
   updateFormPreview();
   if (replace) replaceView('form'); else show('form');
-  if (!card) setTimeout(() => $('#f-name').focus(), 250);
+  if (fromScan) setTimeout(() => $('#f-name').focus({ preventScroll: true }), 300);
 }
 
 function updateFormPreview() {
@@ -532,13 +736,15 @@ function updateFormPreview() {
   const box = $('#form-preview');
   const warn = $('#form-format-warning');
   warn.hidden = true;
+  updateCardPreview();
   if (!code) {
+    box.classList.remove('qr');
     box.innerHTML = '<p class="muted small">L\'anteprima del codice comparirà qui</p>';
     return;
   }
-  const used = renderBarcode(box, code, fmt, { small: true });
+  const used = renderBarcode(box, code, fmt, 'small');
   if (!used) {
-    box.innerHTML = '<p class="error small">Questo numero non può essere trasformato in codice.</p>';
+    box.innerHTML = '<p class="error small">Questo numero non può diventare un codice.</p>';
   } else if (fmt !== 'auto' && used !== fmt) {
     warn.textContent = 'Il numero non è valido per il tipo scelto: verrà usato Code 128.';
     warn.hidden = false;
@@ -547,10 +753,11 @@ function updateFormPreview() {
 
 function updatePhotoPreview() {
   const img = $('#f-photo-preview');
-  img.hidden = !state.formPhoto;
-  if (state.formPhoto) img.src = state.formPhoto; else img.removeAttribute('src');
-  $('#f-photo-remove').hidden = !state.formPhoto;
-  $('#f-photo-btn').textContent = state.formPhoto ? '📷 Cambia foto' : '📷 Aggiungi foto';
+  const src = state.formPhoto === undefined ? state.formPhotoShown : state.formPhoto;
+  img.hidden = !src;
+  if (src) img.src = src; else img.removeAttribute('src');
+  $('#f-photo-remove').hidden = !src;
+  $('#f-photo-btn').textContent = src ? '📷 Cambia foto' : '📷 Aggiungi foto';
 }
 
 async function saveForm(ev) {
@@ -558,14 +765,14 @@ async function saveForm(ev) {
   const name = $('#f-name').value.trim();
   const code = $('#f-code').value.trim();
   const err = $('#form-error');
-  if (!name) { err.textContent = 'Scrivi il nome del negozio.'; err.hidden = false; $('#f-name').focus(); return; }
-  if (!code) { err.textContent = 'Scrivi il numero della carta.'; err.hidden = false; $('#f-code').focus(); return; }
+  const fail = (msg, el) => { err.textContent = msg; err.hidden = false; vibrate([30, 40, 30]); if (el) el.focus(); };
+  if (!name) return fail('Scrivi il nome del negozio.', $('#f-name'));
+  if (!code) return fail('Scrivi il numero della carta.', $('#f-code'));
 
   let format = $('#f-format').value;
-  const test = document.createElement('div');
-  const used = renderBarcode(test, code, format);
-  if (!used) { err.textContent = 'Questo numero non può essere trasformato in codice. Controlla di averlo scritto bene.'; err.hidden = false; return; }
-  if (format !== 'auto') format = used;
+  const used = makeBarcodeSvg(code, format, 'large');
+  if (!used) return fail('Questo numero non può diventare un codice. Controlla di averlo scritto bene.', $('#f-code'));
+  if (format !== 'auto') format = used.fmt;
 
   const now = Date.now();
   const card = {
@@ -573,22 +780,22 @@ async function saveForm(ev) {
     name,
     code,
     format,
-    color: state.formColor || colorFor(name),
+    color: currentFormColor(),
     notes: $('#f-notes').value.trim(),
-    photo: state.formPhoto || null,
+    fav: $('#f-fav').checked,
+    hasPhoto: state.editing ? !!state.editing.hasPhoto : false,
     created: state.editing ? state.editing.created : now,
     updated: now,
   };
   try {
-    await DB.put(card);
+    await DB.put(card, state.formPhoto);
   } catch (e) {
-    err.textContent = 'Non è stato possibile salvare: memoria del telefono piena?';
-    err.hidden = false;
-    return;
+    return fail('Non è stato possibile salvare: memoria del telefono piena?');
   }
+  const wasEditing = !!state.editing;
   await loadCards();
   vibrate(30);
-  toast(state.editing ? 'Carta aggiornata ✔' : 'Carta salvata ✔');
+  toast(wasEditing ? 'Carta aggiornata ✔' : 'Carta salvata ✔');
   // Dopo il salvataggio mostra subito la carta (Indietro riporta alla home).
   state.stack = ['home'];
   openCard(card.id);
@@ -600,60 +807,81 @@ async function saveForm(ev) {
 let torchOn = false;
 async function startCameraScan() {
   show('scan');
-  $('#scan-hint').textContent = 'Tieni la carta ferma dentro il riquadro, con il codice a barre orizzontale e ben illuminato.';
+  $('#scan-hint').textContent = 'Tieni il codice a barre dentro il riquadro, ben illuminato.';
   $('#btn-torch').hidden = true;
+  $('#btn-torch').textContent = '🔦 Torcia';
   torchOn = false;
   try {
     await Scanner.start($('#scan-video'), onScanned);
     $('#btn-torch').hidden = !Scanner.hasTorch();
+    // Dopo un po' senza risultati, un consiglio in più.
+    clearTimeout(startCameraScan._hint);
+    startCameraScan._hint = setTimeout(() => {
+      if ($('#view-scan').classList.contains('active')) {
+        $('#scan-hint').textContent = 'Avvicina o allontana un po\' la carta finché il codice è nitido. Evita i riflessi della luce.';
+      }
+    }, 9000);
   } catch (e) {
     let msg = 'Non riesco ad aprire la fotocamera.';
     if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) {
       msg = 'Serve il permesso per usare la fotocamera. Consentilo nelle impostazioni del telefono, oppure scrivi il numero a mano.';
     } else if (e && e.message === 'nocamera') {
-      msg = 'Questo dispositivo non permette di usare la fotocamera qui. Usa "Da una foto" oppure scrivi il numero a mano.';
+      msg = 'Qui non si può usare la fotocamera. Usa "Da una foto" oppure scrivi il numero a mano.';
     }
     $('#scan-hint').textContent = msg;
   }
 }
 function onScanned(r) {
+  clearTimeout(startCameraScan._hint);
   vibrate([60, 40, 60]);
-  // Sostituisce la schermata scanner con il modulo (così "Indietro" torna alla scelta).
-  openForm({ code: r.code, format: r.format, fromScan: true, replace: true });
+  const f = $('#scan-flash');
+  f.classList.remove('on'); void f.offsetWidth; f.classList.add('on');
+  // Se il codice c'è già, lo dice subito.
+  const dup = state.cards.find(c => c.code === r.code);
+  setTimeout(() => {
+    openForm({ code: r.code, format: r.format, fromScan: true, replace: true });
+    if (dup) toast(`Attenzione: hai già questo codice nella carta "${dup.name}".`, { ms: 5000 });
+  }, 220);
 }
 
 async function scanFromPhoto(file) {
   if (!file) return;
-  toast('Sto leggendo la foto…', 8000);
+  toast('Sto leggendo la foto…', { ms: 15000 });
   try {
     const r = await Scanner.decodeFile(file);
-    $('#toast').hidden = true;
+    hideToast();
     if (r && r.code) {
       vibrate([60, 40, 60]);
-      openForm({ code: r.code, format: r.format, fromScan: true });
-      // Conserva la foto come immagine della carta.
-      try { state.formPhoto = await shrinkPhoto(file); updatePhotoPreview(); } catch (_) {}
+      let photo = null;
+      try { photo = await shrinkPhoto(r.img); } catch (_) {}
+      openForm({ code: r.code, format: r.format, fromScan: true, photo });
     } else {
-      toast('Non ho trovato un codice nella foto. Prova con una foto più vicina e nitida, oppure scrivi il numero a mano.', 5500);
+      toast('Non ho trovato un codice nella foto. Prova con una foto più vicina e nitida, oppure scrivi il numero a mano.', { ms: 6000 });
     }
   } catch (e) {
-    toast('Non riesco a leggere la foto.', 4000);
+    toast('Non riesco a leggere la foto.', { ms: 4000 });
   }
 }
 
 /* =========================================================
  * BACKUP
  * ======================================================= */
+function setLastBackup() { try { localStorage.setItem('carteplus.lastBackup', String(Date.now())); } catch (_) {} }
+function getLastBackup() { try { return Number(localStorage.getItem('carteplus.lastBackup')) || 0; } catch (_) { return 0; } }
+
 async function exportBackup() {
   const cards = await DB.all();
   if (!cards.length) { toast('Non ci sono carte da salvare.'); return; }
-  const data = JSON.stringify({ app: 'carteplus', version: 1, exported: new Date().toISOString(), cards }, null, 1);
+  const photos = new Map((await DB.allPhotos()).map(p => [p.id, p.data]));
+  const full = cards.map(c => ({ ...c, photo: photos.get(c.id) || null }));
+  const data = JSON.stringify({ app: 'carteplus', version: 2, exported: new Date().toISOString(), cards: full });
   const d = new Date();
   const fname = `carte-fedelta-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.json`;
   const file = new File([data], fname, { type: 'application/json' });
   // Su telefono, il menu Condividi permette di salvarla in File/Drive o mandarla via WhatsApp/email.
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Copia carte fedeltà' }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    try { await navigator.share({ files: [file], title: 'Copia carte fedeltà' }); setLastBackup(); updateSettingsInfo(); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
   }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(file);
@@ -661,6 +889,8 @@ async function exportBackup() {
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  setLastBackup();
+  updateSettingsInfo();
   toast('Copia salvata nei download ✔');
 }
 
@@ -673,24 +903,26 @@ async function importBackup(file) {
     let n = 0;
     for (const c of cards) {
       if (!c || !c.name || !c.code) continue;
+      const photo = typeof c.photo === 'string' && c.photo.startsWith('data:image/') ? c.photo : null;
       await DB.put({
-        id: c.id || uid(),
+        id: typeof c.id === 'string' ? c.id : uid(),
         name: String(c.name).slice(0, 40),
         code: String(c.code),
-        format: c.format || 'auto',
-        color: c.color || colorFor(c.name),
-        notes: c.notes || '',
-        photo: typeof c.photo === 'string' && c.photo.startsWith('data:image/') ? c.photo : null,
-        created: c.created || Date.now(),
-        updated: c.updated || Date.now(),
-      });
+        format: typeof c.format === 'string' ? c.format : 'auto',
+        color: /^#[0-9a-f]{6}$/i.test(c.color || '') ? c.color : colorFor(c.name),
+        notes: String(c.notes || '').slice(0, 300),
+        fav: !!c.fav,
+        created: Number(c.created) || Date.now(),
+        updated: Number(c.updated) || Date.now(),
+      }, photo);
       n++;
     }
     await loadCards();
     renderList();
+    updateSettingsInfo();
     toast(n ? `Recuperate ${n} carte ✔` : 'Nessuna carta trovata nel file.');
   } catch (e) {
-    toast('Questo file non è una copia valida di Carte+.', 4000);
+    toast('Questo file non è una copia valida di Carte+.', { ms: 4000 });
   }
 }
 
@@ -727,12 +959,15 @@ async function updateSettingsInfo() {
   $('#status-offline').textContent = swOk
     ? '✅ Pronta per funzionare senza internet.'
     : '⏳ Preparazione per l\'uso senza internet… riapri l\'app tra un momento.';
+  const last = getLastBackup();
+  $('#last-backup').textContent = last
+    ? 'Ultima copia: ' + new Date(last).toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' })
+    : 'Non hai ancora fatto nessuna copia.';
+  let text = state.cards.length === 1 ? '1 carta salvata.' : `${state.cards.length} carte salvate.`;
   try {
-    const persisted = navigator.storage && navigator.storage.persisted ? await navigator.storage.persisted() : false;
-    $('#status-storage').textContent = `Carte salvate: ${state.cards.length}.` + (persisted ? ' Memoria protetta dalla cancellazione automatica.' : '');
-  } catch (_) {
-    $('#status-storage').textContent = `Carte salvate: ${state.cards.length}.`;
-  }
+    if (navigator.storage && navigator.storage.persisted && await navigator.storage.persisted()) text += ' Memoria protetta dalla cancellazione automatica.';
+  } catch (_) {}
+  $('#status-storage').textContent = text;
 }
 
 /* =========================================================
@@ -740,9 +975,15 @@ async function updateSettingsInfo() {
  * ======================================================= */
 function bind() {
   document.querySelectorAll('[data-back]').forEach(b => b.addEventListener('click', back));
-  $('#btn-add').addEventListener('click', () => show('add'));
+  $('#btn-add').addEventListener('click', () => { show('add'); Scanner.warmUp(); });
   $('#btn-settings').addEventListener('click', () => { show('settings'); updateSettingsInfo(); });
   $('#search').addEventListener('input', renderList);
+
+  // Un solo gestore per tutte le carte dell'elenco.
+  $('#lists').addEventListener('click', e => {
+    const t = e.target.closest('.card-tile');
+    if (t) { vibrate(10); openCard(t.dataset.id); }
+  });
 
   $('#btn-scan-camera').addEventListener('click', startCameraScan);
   $('#btn-scan-photo').addEventListener('click', () => $('#photo-input').click());
@@ -750,9 +991,7 @@ function bind() {
   $('#btn-manual').addEventListener('click', () => openForm());
 
   $('#scan-cancel').addEventListener('click', back);
-  $('#scan-to-manual').addEventListener('click', () => {
-    openForm({ replace: true });
-  });
+  $('#scan-to-manual').addEventListener('click', () => { clearTimeout(startCameraScan._hint); openForm({ replace: true }); });
   $('#btn-torch').addEventListener('click', async () => {
     torchOn = !torchOn;
     const ok = await Scanner.torch(torchOn);
@@ -761,9 +1000,9 @@ function bind() {
   });
 
   $('#card-form').addEventListener('submit', saveForm);
-  $('#f-code').addEventListener('input', updateFormPreview);
+  $('#f-name').addEventListener('input', onNameInput);
+  $('#f-code').addEventListener('input', () => { updateFormPreview(); $('#form-error').hidden = true; });
   $('#f-format').addEventListener('change', updateFormPreview);
-  $('#f-name').addEventListener('input', () => { if (!state.formColor) selectColor(null); });
   $('#f-photo-btn').addEventListener('click', () => $('#f-photo-input').click());
   $('#f-photo-input').addEventListener('change', async e => {
     const f = e.target.files[0];
@@ -773,16 +1012,30 @@ function bind() {
   });
   $('#f-photo-remove').addEventListener('click', () => { state.formPhoto = null; updatePhotoPreview(); });
 
+  $('#btn-fav').addEventListener('click', toggleFav);
+  $('#btn-zoom').addEventListener('click', openZoom);
+  $('#show-barcode-btn').addEventListener('click', openZoom);
+  $('#zoom').addEventListener('click', closeZoom);
+  $('#btn-copy').addEventListener('click', copyCode);
   $('#btn-edit').addEventListener('click', () => openForm({ card: state.current }));
   $('#btn-delete').addEventListener('click', async () => {
     const c = state.current;
     if (!c) return;
-    if (await confirmDialog(`Eliminare la carta "${c.name}"?`)) {
-      await DB.remove(c.id);
-      await loadCards();
-      toast('Carta eliminata');
-      goHome();
-    }
+    if (!(await confirmDialog(`Eliminare la carta "${c.name}"?`))) return;
+    const photo = c.hasPhoto ? await DB.photo(c.id).catch(() => null) : null;
+    await DB.remove(c.id);
+    await loadCards();
+    goHome();
+    toast('Carta eliminata', {
+      ms: 6000,
+      action: 'Annulla',
+      onAction: async () => {
+        await DB.put(c, photo);
+        await loadCards();
+        renderList();
+        toast('Carta ripristinata ✔');
+      },
+    });
   });
 
   $('#btn-install').addEventListener('click', async () => {
@@ -799,12 +1052,11 @@ function bind() {
 
 async function init() {
   buildColorSwatches();
-  $('#store-list').innerHTML = STORES.map(s => `<option value="${s.replace(/"/g, '&quot;')}"></option>`).join('');
   bind();
   try {
     await loadCards();
   } catch (e) {
-    toast('Errore nell\'apertura dell\'archivio delle carte.', 5000);
+    toast('Errore nell\'apertura dell\'archivio delle carte.', { ms: 5000 });
   }
   renderList();
 

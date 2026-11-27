@@ -5,11 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Carte+</title>
   <meta name="description" content="Le tue carte fedeltà sempre con te, anche senza internet.">
-  <meta name="theme-color" content="#1f4e8c">
+  <meta name="theme-color" content="#f4f6fa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f141b" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Carte+">
+  <meta name="format-detection" content="telephone=no">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -18,28 +21,41 @@
 <body>
   <!-- ============ HOME ============ -->
   <section id="view-home" class="view active" aria-labelledby="home-title">
-    <header class="topbar">
-      <h1 id="home-title">Le mie carte</h1>
+    <header class="topbar topbar-home">
+      <div>
+        <h1 id="home-title">Le mie carte</h1>
+        <p class="subtitle" id="home-count"></p>
+      </div>
       <button class="icon-btn" id="btn-settings" aria-label="Impostazioni">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm7.4-2.5a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1c.5.4 1.1.7 1.7 1l.4 2.5h4l.4-2.5c.6-.3 1.2-.6 1.7-1l2.4 1 2-3.4-2-1.6Z"/></svg>
       </button>
     </header>
 
     <div class="search-wrap" id="search-wrap" hidden>
-      <input type="search" id="search" placeholder="Cerca una carta…" autocomplete="off" aria-label="Cerca una carta">
+      <svg class="search-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 4a6.5 6.5 0 0 1 5.2 10.4l4.4 4.4-1.4 1.4-4.4-4.4A6.5 6.5 0 1 1 10.5 4Zm0 2a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"/></svg>
+      <input type="search" id="search" placeholder="Cerca una carta" autocomplete="off" aria-label="Cerca una carta">
     </div>
 
-    <div id="card-list" class="card-grid" role="list"></div>
+    <div id="lists">
+      <h2 class="section-title" id="fav-title" hidden>⭐ Preferite</h2>
+      <div id="fav-list" class="card-grid" role="list" aria-labelledby="fav-title"></div>
+      <h2 class="section-title" id="all-title" hidden>Tutte le carte</h2>
+      <div id="card-list" class="card-grid" role="list"></div>
+      <p class="muted no-results" id="no-results" hidden>Nessuna carta trovata.</p>
+    </div>
 
     <div id="empty" class="empty" hidden>
-      <div class="empty-art" aria-hidden="true">💳</div>
-      <p class="empty-title">Nessuna carta ancora</p>
-      <p>Tocca il pulsante qui sotto per aggiungere la prima carta fedeltà.</p>
+      <div class="empty-card" aria-hidden="true">
+        <div class="empty-card-bars"></div>
+      </div>
+      <p class="empty-title">Nessuna carta, per ora</p>
+      <p>Tocca <strong>Aggiungi carta</strong> qui sotto e inquadra il codice a barre della tua carta fedeltà.</p>
     </div>
 
     <div class="bottom-bar">
       <button class="btn btn-primary btn-big" id="btn-add">
-        <span aria-hidden="true">＋</span> Aggiungi carta
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+        Aggiungi carta
       </button>
     </div>
   </section>
@@ -47,22 +63,28 @@
   <!-- ============ AGGIUNGI: SCELTA ============ -->
   <section id="view-add" class="view" aria-labelledby="add-title">
     <header class="topbar">
-      <button class="back-btn" data-back aria-label="Indietro">‹ Indietro</button>
-      <h1 id="add-title">Nuova carta</h1>
+      <button class="back-btn" data-back aria-label="Indietro"><span aria-hidden="true">‹</span> Indietro</button>
     </header>
     <div class="content">
-      <p class="lead">Come vuoi aggiungere la carta?</p>
-      <button class="choice" id="btn-scan-camera">
-        <span class="choice-icon" aria-hidden="true">📷</span>
-        <span><strong>Inquadra il codice a barre</strong><br><small>Usa la fotocamera del telefono</small></span>
+      <h1 class="page-title" id="add-title">Nuova carta</h1>
+      <p class="lead">Come vuoi aggiungerla?</p>
+      <button class="choice choice-main" id="btn-scan-camera">
+        <span class="choice-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M3 7V4h3V2H1v5h2Zm18 0h2V2h-5v2h3v3ZM3 17H1v5h5v-2H3v-3Zm18 3h-3v2h5v-5h-2v3ZM6 6h1.5v12H6zm3 0h1v12H9zm2.5 0h2v12h-2zm3.5 0h1v12h-1zm2 0h1.5v12H17z"/></svg>
+        </span>
+        <span><strong>Inquadra il codice</strong><small>Con la fotocamera · consigliato</small></span>
       </button>
       <button class="choice" id="btn-scan-photo">
-        <span class="choice-icon" aria-hidden="true">🖼️</span>
-        <span><strong>Da una foto</strong><br><small>Scegli una foto della carta già scattata</small></span>
+        <span class="choice-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm0 2v8.6l4-4 3 3 5-5 4 4V7H4Zm4 2.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"/></svg>
+        </span>
+        <span><strong>Da una foto</strong><small>Scegli una foto già scattata</small></span>
       </button>
       <button class="choice" id="btn-manual">
-        <span class="choice-icon" aria-hidden="true">⌨️</span>
-        <span><strong>Scrivi il numero a mano</strong><br><small>Copia il numero stampato sotto il codice</small></span>
+        <span class="choice-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M3 6h18a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Zm1 2v8h16V8H4Zm1 1h2v2H5V9Zm3 0h2v2H8V9Zm3 0h2v2h-2V9Zm3 0h2v2h-2V9Zm3 0h2v2h-2V9ZM7 13h10v2H7v-2Z"/></svg>
+        </span>
+        <span><strong>Scrivi il numero</strong><small>Copia il numero stampato sotto il codice</small></span>
       </button>
       <input type="file" id="photo-input" accept="image/*" hidden>
     </div>
@@ -71,47 +93,79 @@
   <!-- ============ SCANNER ============ -->
   <section id="view-scan" class="view view-dark" aria-labelledby="scan-title">
     <header class="topbar topbar-dark">
-      <button class="back-btn" id="scan-cancel" aria-label="Annulla">‹ Annulla</button>
-      <h1 id="scan-title">Inquadra il codice</h1>
+      <button class="back-btn" id="scan-cancel" aria-label="Annulla"><span aria-hidden="true">‹</span> Annulla</button>
+      <h1 id="scan-title" class="topbar-title">Inquadra il codice</h1>
     </header>
     <div class="scan-stage">
       <video id="scan-video" playsinline muted autoplay></video>
-      <div class="scan-frame" aria-hidden="true"><div class="scan-line"></div></div>
+      <div class="scan-frame" aria-hidden="true"><i></i><i></i><i></i><i></i><div class="scan-line"></div></div>
+      <div class="scan-flash" id="scan-flash" aria-hidden="true"></div>
     </div>
-    <p class="scan-hint" id="scan-hint">Tieni la carta ferma dentro il riquadro, con il codice a barre orizzontale e ben illuminato.</p>
+    <p class="scan-hint" id="scan-hint">Tieni il codice a barre dentro il riquadro, ben illuminato.</p>
     <div class="scan-actions">
       <button class="btn btn-ghost-light" id="btn-torch" hidden>🔦 Torcia</button>
-      <button class="btn btn-ghost-light" id="scan-to-manual">Scrivi a mano</button>
+      <button class="btn btn-ghost-light" id="scan-to-manual">⌨️ Scrivi a mano</button>
     </div>
   </section>
 
   <!-- ============ MODULO CARTA ============ -->
   <section id="view-form" class="view" aria-labelledby="form-title">
     <header class="topbar">
-      <button class="back-btn" data-back aria-label="Indietro">‹ Indietro</button>
-      <h1 id="form-title">Dati della carta</h1>
+      <button class="back-btn" data-back aria-label="Indietro"><span aria-hidden="true">‹</span> Indietro</button>
     </header>
     <form id="card-form" class="content form" novalidate>
-      <div class="scan-ok" id="scan-ok" hidden>✅ Codice letto correttamente!</div>
+      <h1 class="page-title" id="form-title">Dati della carta</h1>
+      <div class="scan-ok" id="scan-ok" hidden>✅ Codice letto! Ora scrivi il nome del negozio.</div>
+
+      <div class="card-preview" id="card-preview" aria-hidden="true">
+        <span class="cp-name" id="cp-name">Nome negozio</span>
+        <span class="cp-digits" id="cp-digits"></span>
+      </div>
 
       <label class="field">
         <span class="label">Nome del negozio</span>
-        <input type="text" id="f-name" list="store-list" required autocomplete="off" placeholder="Es. Conad, Coop, Esselunga…" maxlength="40">
-        <datalist id="store-list"></datalist>
+        <input type="text" id="f-name" required autocomplete="off" autocapitalize="words" placeholder="Es. Conad, Coop, Esselunga" maxlength="40">
       </label>
+      <div class="chips" id="name-chips" aria-label="Suggerimenti"></div>
 
       <label class="field">
         <span class="label">Numero della carta</span>
-        <input type="text" id="f-code" required autocomplete="off" inputmode="text" placeholder="Il numero sotto il codice a barre" maxlength="200">
+        <input type="text" id="f-code" required autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text" placeholder="Il numero sotto il codice a barre" maxlength="200">
       </label>
 
       <div class="preview-box" id="form-preview" aria-label="Anteprima codice">
         <p class="muted small">L'anteprima del codice comparirà qui</p>
       </div>
-      <p class="error" id="form-format-warning" hidden></p>
+      <p class="warn" id="form-format-warning" hidden></p>
+
+      <fieldset class="field">
+        <legend class="label">Colore</legend>
+        <div class="swatches" id="f-colors" role="radiogroup" aria-label="Colore della carta"></div>
+      </fieldset>
+
+      <label class="toggle-row">
+        <input type="checkbox" id="f-fav">
+        <span class="toggle" aria-hidden="true"></span>
+        <span>⭐ Metti tra le preferite <small class="muted">(in cima alla lista)</small></span>
+      </label>
+
+      <div class="field">
+        <span class="label">Foto della carta <small class="muted">(facoltativa)</small></span>
+        <div class="photo-row">
+          <img id="f-photo-preview" alt="Foto della carta" hidden>
+          <button type="button" class="btn btn-secondary" id="f-photo-btn">📷 Aggiungi foto</button>
+          <button type="button" class="btn btn-text danger" id="f-photo-remove" hidden>Rimuovi</button>
+        </div>
+        <input type="file" id="f-photo-input" accept="image/*" hidden>
+      </div>
+
+      <label class="field">
+        <span class="label">Note <small class="muted">(facoltative)</small></span>
+        <textarea id="f-notes" rows="2" maxlength="300" placeholder="Es. carta di Maria, punti, scadenza"></textarea>
+      </label>
 
       <details class="field advanced">
-        <summary>Tipo di codice (avanzato)</summary>
+        <summary>Tipo di codice <small class="muted">(avanzato)</small></summary>
         <select id="f-format" aria-label="Tipo di codice">
           <option value="auto">Automatico</option>
           <option value="EAN13">EAN-13 (13 cifre)</option>
@@ -126,50 +180,46 @@
         </select>
       </details>
 
-      <fieldset class="field">
-        <legend class="label">Colore</legend>
-        <div class="swatches" id="f-colors" role="radiogroup" aria-label="Colore della carta"></div>
-      </fieldset>
-
-      <div class="field">
-        <span class="label">Foto della carta <small class="muted">(facoltativa)</small></span>
-        <div class="photo-row">
-          <img id="f-photo-preview" alt="Foto della carta" hidden>
-          <button type="button" class="btn btn-secondary" id="f-photo-btn">📷 Aggiungi foto</button>
-          <button type="button" class="btn btn-text danger" id="f-photo-remove" hidden>Rimuovi foto</button>
-        </div>
-        <input type="file" id="f-photo-input" accept="image/*" capture="environment" hidden>
-      </div>
-
-      <label class="field">
-        <span class="label">Note <small class="muted">(facoltative)</small></span>
-        <textarea id="f-notes" rows="2" maxlength="300" placeholder="Es. carta di Maria, PIN, punti…"></textarea>
-      </label>
-
       <p class="error" id="form-error" role="alert" hidden></p>
 
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary btn-big">💾 Salva carta</button>
+        <button type="submit" class="btn btn-primary btn-big">Salva carta</button>
       </div>
     </form>
   </section>
 
   <!-- ============ MOSTRA CARTA ============ -->
-  <section id="view-show" class="view view-white" aria-labelledby="show-title">
+  <section id="view-show" class="view" aria-labelledby="show-title">
     <header class="topbar">
-      <button class="back-btn" data-back aria-label="Torna alle carte">‹ Carte</button>
-      <h1 id="show-title" class="show-title"></h1>
+      <button class="back-btn" data-back aria-label="Torna alle carte"><span aria-hidden="true">‹</span> Carte</button>
+      <button class="icon-btn fav-btn" id="btn-fav" aria-pressed="false" aria-label="Preferita">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/></svg>
+      </button>
     </header>
     <div class="show-body">
-      <div class="show-band" id="show-band"></div>
-      <div class="barcode-box" id="show-barcode" aria-label="Codice a barre"></div>
-      <p class="show-code" id="show-code"></p>
-      <p class="show-tip">💡 Alza la luminosità dello schermo se il negozio non riesce a leggerlo.</p>
+      <div class="hero-card" id="show-hero">
+        <h1 id="show-title" class="hero-name"></h1>
+      </div>
+      <button class="barcode-card" id="show-barcode-btn" aria-label="Ingrandisci il codice">
+        <div class="barcode-box" id="show-barcode"></div>
+        <p class="show-code" id="show-code"></p>
+      </button>
+      <div class="show-main-actions">
+        <button class="btn btn-primary" id="btn-zoom">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v2H6v4H4V4Zm10 0h6v6h-2V6h-4V4ZM4 14h2v4h4v2H4v-6Zm14 0h2v6h-6v-2h4v-4Z"/></svg>
+          Ingrandisci
+        </button>
+        <button class="btn btn-secondary" id="btn-copy">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h11a2 2 0 0 1 2 2v11h-2V5H8V3ZM5 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm0 2v10h10V9H5Z"/></svg>
+          Copia
+        </button>
+      </div>
+      <p class="show-tip">💡 Se la cassa non legge il codice, alza la luminosità dello schermo.</p>
       <p class="show-notes" id="show-notes" hidden></p>
       <img class="show-photo" id="show-photo" alt="Foto della carta" hidden>
       <div class="show-actions">
-        <button class="btn btn-secondary" id="btn-edit">✏️ Modifica</button>
-        <button class="btn btn-secondary danger" id="btn-delete">🗑️ Elimina</button>
+        <button class="btn btn-text" id="btn-edit">✏️ Modifica</button>
+        <button class="btn btn-text danger" id="btn-delete">🗑️ Elimina</button>
       </div>
     </div>
   </section>
@@ -177,31 +227,32 @@
   <!-- ============ IMPOSTAZIONI ============ -->
   <section id="view-settings" class="view" aria-labelledby="settings-title">
     <header class="topbar">
-      <button class="back-btn" data-back aria-label="Indietro">‹ Indietro</button>
-      <h1 id="settings-title">Impostazioni</h1>
+      <button class="back-btn" data-back aria-label="Indietro"><span aria-hidden="true">‹</span> Indietro</button>
     </header>
     <div class="content">
+      <h1 class="page-title" id="settings-title">Impostazioni</h1>
       <div class="panel">
-        <h2>📲 Metti l'app sulla schermata Home</h2>
+        <h2>📲 Sulla schermata Home</h2>
         <p id="install-text">Così la apri con un tocco, come le altre app, e funziona anche senza internet.</p>
         <button class="btn btn-primary" id="btn-install" hidden>Installa l'app</button>
-        <ul class="steps" id="install-steps-ios" hidden>
-          <li>Tocca il pulsante <strong>Condividi</strong> (il quadrato con la freccia in su) in basso in Safari.</li>
-          <li>Scorri e scegli <strong>Aggiungi alla schermata Home</strong>.</li>
+        <ol class="steps" id="install-steps-ios" hidden>
+          <li>Tocca <strong>Condividi</strong> (il quadrato con la freccia in su) in Safari.</li>
+          <li>Scegli <strong>Aggiungi alla schermata Home</strong>.</li>
           <li>Tocca <strong>Aggiungi</strong>.</li>
-        </ul>
-        <ul class="steps" id="install-steps-android" hidden>
+        </ol>
+        <ol class="steps" id="install-steps-android" hidden>
           <li>Tocca i <strong>tre puntini ⋮</strong> in alto a destra in Chrome.</li>
           <li>Scegli <strong>Installa app</strong> oppure <strong>Aggiungi a schermata Home</strong>.</li>
-        </ul>
+        </ol>
       </div>
 
       <div class="panel">
         <h2>🛟 Copia di sicurezza</h2>
-        <p>Le carte sono salvate solo su questo telefono. Fai ogni tanto una copia: se cambi telefono potrai recuperarle.</p>
+        <p>Le carte sono salvate solo su questo telefono. Fai una copia ogni tanto: se cambi telefono potrai recuperarle.</p>
+        <p class="muted small" id="last-backup"></p>
         <div class="panel-actions">
-          <button class="btn btn-secondary" id="btn-export">⬇️ Salva copia</button>
-          <button class="btn btn-secondary" id="btn-import">⬆️ Recupera da copia</button>
+          <button class="btn btn-secondary" id="btn-export">Salva copia</button>
+          <button class="btn btn-secondary" id="btn-import">Recupera da copia</button>
         </div>
         <input type="file" id="import-input" accept="application/json,.json" hidden>
       </div>
@@ -215,8 +266,17 @@
     </div>
   </section>
 
+  <!-- Codice ingrandito (per la cassa) -->
+  <div class="zoom" id="zoom" hidden role="dialog" aria-modal="true" aria-label="Codice ingrandito">
+    <div class="zoom-inner" id="zoom-inner">
+      <div class="zoom-code" id="zoom-code"></div>
+      <p class="zoom-num" id="zoom-num"></p>
+    </div>
+    <p class="zoom-close">Tocca per chiudere</p>
+  </div>
+
   <!-- Messaggi e conferme -->
-  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden><span id="toast-text"></span><button id="toast-action" class="toast-action" hidden></button></div>
   <dialog id="confirm" class="confirm">
     <form method="dialog">
       <p id="confirm-text"></p>
@@ -227,8 +287,8 @@
     </form>
   </dialog>
 
-  <script src="vendor/JsBarcode.all.min.js"></script>
-  <script src="vendor/qrcode-generator.js"></script>
-  <script src="app.js"></script>
+  <script src="vendor/JsBarcode.all.min.js" defer></script>
+  <script src="vendor/qrcode-generator.min.js" defer></script>
+  <script src="app.js" defer></script>
 </body>
 </html>

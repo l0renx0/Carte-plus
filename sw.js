@@ -1,5 +1,5 @@
 /* Service worker: salva tutta l'app sul telefono così funziona senza internet. */
-const CACHE = 'carteplus-v1.0.0';
+const CACHE = 'carteplus-v1.1.0';
 const FILES = [
   './',
   'index.html',
@@ -7,7 +7,7 @@ const FILES = [
   'app.js',
   'manifest.webmanifest',
   'vendor/JsBarcode.all.min.js',
-  'vendor/qrcode-generator.js',
+  'vendor/qrcode-generator.min.js',
   'vendor/zxing.min.js',
   'icons/icon-192.png',
   'icons/icon-512.png',

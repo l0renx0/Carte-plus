@@ -4,12 +4,13 @@ Web-app per salvare le carte fedeltà sul telefono e mostrarle alla cassa.
 **Funziona completamente offline**: dopo la prima apertura tutto (app, lettore di codici, carte) resta sul telefono.
 
 ## Cosa fa
-- **Aggiungi carta** in tre modi: inquadrando il codice a barre con la fotocamera, da una foto già scattata, oppure scrivendo il numero a mano.
-- **Mostra la carta**: un tocco sulla carta apre il codice a barre grande su sfondo bianco, con il numero sotto; lo schermo resta acceso finché è aperta.
+- **Aggiungi carta** in tre modi: inquadrando il codice a barre con la fotocamera, da una foto già scattata, oppure scrivendo il numero a mano. Nomi dei negozi suggeriti da toccare, con il colore tipico per le catene più note.
+- **Mostra la carta**: un tocco apre il codice a barre su fondo bianco con il numero sotto; **Ingrandisci** lo mostra a tutto schermo in orizzontale per la cassa. Lo schermo resta acceso finché la carta è aperta.
+- **Preferite** in cima alla lista, ricerca, ultime 4 cifre visibili su ogni carta, tema chiaro/scuro automatico.
 - Codici supportati: EAN-13, EAN-8, UPC-A/E, Code 128, Code 39, Code 93, ITF, Codabar, QR Code.
-- Colore, foto e note facoltative per ogni carta; ricerca quando le carte sono tante.
+- Colore, foto e note facoltative per ogni carta; eliminazione con possibilità di annullare.
 - **Copia di sicurezza**: esporta/importa un file `.json` (da Impostazioni) per non perdere le carte cambiando telefono.
-- Nessun server, nessun account: i dati restano solo sul dispositivo (IndexedDB).
+- Nessun server, nessun account: i dati restano solo sul dispositivo (IndexedDB; le foto in un archivio separato per tenere l'elenco veloce).
 
 ## Pubblicazione (una volta sola)
 L'app è un sito statico: serve solo un indirizzo **https** (necessario per fotocamera e modalità offline).
