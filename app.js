@@ -1,90 +1,128 @@
 /* Carte+ — carte fedeltà offline. Tutto resta sul telefono (IndexedDB). */
 'use strict';
 
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.2.0';
 
 /* =========================================================
  * Archivio (IndexedDB)
- *  - "cards": dati leggeri delle carte (elenco veloce)
- *  - "photos": foto, caricate solo quando servono
+ *
+ * L'archivio si apre SEMPRE alla versione già presente sul telefono, senza
+ * mai richiedere aggiornamenti di struttura: così nessuna versione dell'app
+ * può restare bloccata o rendere invisibili le carte salvate da un'altra.
+ *  - "cards": dati delle carte
+ *  - "photos": foto separate (se l'archivio le prevede); altrimenti la foto
+ *    resta dentro la carta. Entrambi i casi sono gestiti.
  * ======================================================= */
 const DB = (() => {
   let dbp = null;
+  let hasPhotoStore = false;
   const reqP = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
 
-  function open() {
-    if (dbp) return dbp;
-    dbp = new Promise((resolve, reject) => {
-      const req = indexedDB.open('carteplus', 2);
-      req.onupgradeneeded = ev => {
+  function openRaw(version) {
+    return new Promise((resolve, reject) => {
+      const req = version ? indexedDB.open('carteplus', version) : indexedDB.open('carteplus');
+      let settled = false;
+      req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains('cards')) db.createObjectStore('cards', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' });
-        // v1 -> v2: sposta le foto fuori dalle carte.
-        if (ev.oldVersion === 1) {
-          const t = req.transaction;
-          const cards = t.objectStore('cards');
-          const photos = t.objectStore('photos');
-          cards.openCursor().onsuccess = e => {
-            const cur = e.target.result;
-            if (!cur) return;
-            const c = cur.value;
-            if (c.photo) {
-              photos.put({ id: c.id, data: c.photo });
-              c.hasPhoto = true;
-              delete c.photo;
-              cur.update(c);
-            }
-            cur.continue();
-          };
-        }
       };
-      req.onsuccess = () => {
-        const db = req.result;
-        // Se un'altra finestra dell'app (più nuova) deve aggiornare l'archivio, lasciala fare.
-        db.onversionchange = () => { db.close(); dbp = null; };
-        resolve(db);
-      };
-      req.onerror = () => { dbp = null; reject(req.error); };
-      // Un'altra finestra aperta con la versione vecchia blocca l'aggiornamento:
-      // i dati ci sono, basta chiuderla.
+      req.onsuccess = () => { settled = true; resolve(req.result); };
+      req.onerror = () => { settled = true; reject(req.error); };
       req.onblocked = () => {
-        toast('Chiudi le altre finestre di Carte+ aperte e riapri l\'app: le tue carte sono al sicuro.', { ms: 15000 });
+        setTimeout(() => { if (!settled) toast('Chiudi le altre finestre di Carte+ e riapri l\'app. Le tue carte sono al sicuro.', { ms: 15000 }); }, 1500);
       };
     });
+  }
+
+  function open() {
+    if (dbp) return dbp;
+    dbp = (async () => {
+      let db = await openRaw();
+      // Caso rarissimo: archivio senza la tabella delle carte -> la crea.
+      if (!db.objectStoreNames.contains('cards')) {
+        const v = db.version + 1;
+        db.close();
+        db = await openRaw(v);
+      }
+      hasPhotoStore = db.objectStoreNames.contains('photos');
+      // Se un'altra finestra deve modificare l'archivio, lasciala fare e riapri dopo.
+      db.onversionchange = () => { db.close(); dbp = null; };
+      db.onclose = () => { dbp = null; };
+      return db;
+    })();
+    dbp.catch(() => { dbp = null; });
     return dbp;
   }
 
-  async function run(stores, mode, fn) {
+  async function run(storeNames, mode, fn) {
     const db = await open();
+    const stores = storeNames.filter(n => n !== 'photos' || hasPhotoStore);
     return new Promise((resolve, reject) => {
       const t = db.transaction(stores, mode);
       let result;
-      Promise.resolve(fn(t)).then(r => { result = r; });
+      Promise.resolve(fn(t)).then(r => { result = r; }, reject);
       t.oncomplete = () => resolve(result);
       t.onerror = () => reject(t.error);
-      t.onabort = () => reject(t.error);
+      t.onabort = () => reject(t.error || new Error('abort'));
     });
   }
 
+  /* Versione "leggera" di una carta (senza foto incorporata). */
+  function light(r) {
+    if (!r) return r;
+    if (r.photo) { const c = { ...r, hasPhoto: true }; delete c.photo; return c; }
+    return r;
+  }
+
   return {
-    all: () => run('cards', 'readonly', t => reqP(t.objectStore('cards').getAll())),
-    get: id => run('cards', 'readonly', t => reqP(t.objectStore('cards').get(id))),
-    photo: id => run('photos', 'readonly', t => reqP(t.objectStore('photos').get(id))).then(r => (r ? r.data : null)),
-    allPhotos: () => run('photos', 'readonly', t => reqP(t.objectStore('photos').getAll())),
+    all: () => run(['cards'], 'readonly', t => reqP(t.objectStore('cards').getAll())).then(list => list.filter(c => c && c.id && c.name).map(light)),
+    get: id => run(['cards'], 'readonly', t => reqP(t.objectStore('cards').get(id))).then(light),
+    photo: id => run(['cards', 'photos'], 'readonly', async t => {
+      if (hasPhotoStore) {
+        const p = await reqP(t.objectStore('photos').get(id));
+        if (p && p.data) return p.data;
+      }
+      const c = await reqP(t.objectStore('cards').get(id));
+      return (c && c.photo) || null;
+    }),
+    allPhotos: () => run(['cards', 'photos'], 'readonly', async t => {
+      const map = new Map();
+      const cards = await reqP(t.objectStore('cards').getAll());
+      cards.forEach(c => { if (c && c.photo) map.set(c.id, c.photo); });
+      if (hasPhotoStore) (await reqP(t.objectStore('photos').getAll())).forEach(p => map.set(p.id, p.data));
+      return map;
+    }),
     /* photo: stringa = salva, null = elimina, undefined = lascia com'è */
     put: (card, photo) => run(['cards', 'photos'], 'readwrite', t => {
+      const cards = t.objectStore('cards');
       const c = { ...card };
-      if (photo !== undefined) {
-        if (photo) { t.objectStore('photos').put({ id: c.id, data: photo }); c.hasPhoto = true; }
-        else { t.objectStore('photos').delete(c.id); c.hasPhoto = false; }
-      }
       delete c.photo;
-      t.objectStore('cards').put(c);
+      if (hasPhotoStore) {
+        if (photo !== undefined) {
+          if (photo) { t.objectStore('photos').put({ id: c.id, data: photo }); c.hasPhoto = true; }
+          else { t.objectStore('photos').delete(c.id); c.hasPhoto = false; }
+        }
+        cards.put(c);
+        return;
+      }
+      // Archivio senza tabella foto: la foto sta dentro la carta.
+      if (photo !== undefined) {
+        c.photo = photo || null;
+        c.hasPhoto = !!photo;
+        cards.put(c);
+        return;
+      }
+      cards.get(c.id).onsuccess = e => {
+        const old = e.target.result;
+        c.photo = (old && old.photo) || null;
+        c.hasPhoto = !!c.photo;
+        cards.put(c);
+      };
     }),
     remove: id => run(['cards', 'photos'], 'readwrite', t => {
       t.objectStore('cards').delete(id);
-      t.objectStore('photos').delete(id);
+      if (hasPhotoStore) t.objectStore('photos').delete(id);
     }),
   };
 })();
@@ -800,7 +838,16 @@ async function saveForm(ev) {
   try {
     await DB.put(card, state.formPhoto);
   } catch (e) {
-    return fail('Non è stato possibile salvare: memoria del telefono piena?');
+    // Un secondo tentativo risolve i casi in cui l'archivio era stato chiuso dal sistema.
+    try {
+      await new Promise(r => setTimeout(r, 400));
+      await DB.put(card, state.formPhoto);
+    } catch (e2) {
+      const full = e2 && (e2.name === 'QuotaExceededError');
+      return fail(full
+        ? 'Memoria del telefono piena: libera un po\' di spazio e riprova.'
+        : 'Non sono riuscito a salvare. Chiudi del tutto l\'app, riaprila e riprova.');
+    }
   }
   const wasEditing = !!state.editing;
   await loadCards();
@@ -882,7 +929,7 @@ function getLastBackup() { try { return Number(localStorage.getItem('carteplus.l
 async function exportBackup() {
   const cards = await DB.all();
   if (!cards.length) { toast('Non ci sono carte da salvare.'); return; }
-  const photos = new Map((await DB.allPhotos()).map(p => [p.id, p.data]));
+  const photos = await DB.allPhotos();
   const full = cards.map(c => ({ ...c, photo: photos.get(c.id) || null }));
   const data = JSON.stringify({ app: 'carteplus', version: 2, exported: new Date().toISOString(), cards: full });
   const d = new Date();
@@ -987,6 +1034,9 @@ async function updateSettingsInfo() {
 function bind() {
   document.querySelectorAll('[data-back]').forEach(b => b.addEventListener('click', back));
   $('#btn-add').addEventListener('click', () => { show('add'); Scanner.warmUp(); });
+  $('#btn-retry').addEventListener('click', async () => {
+    if (!(await refreshCards())) toast('Ancora niente. Chiudi del tutto l\'app e riaprila.', { ms: 6000 });
+  });
   $('#btn-settings').addEventListener('click', () => { show('settings'); updateSettingsInfo(); });
   $('#search').addEventListener('input', renderList);
 
@@ -1079,23 +1129,70 @@ function updateStorageHint() {
   box.hidden = !html;
 }
 
-async function init() {
-  buildColorSwatches();
-  bind();
+async function refreshCards() {
+  const errBox = $('#load-error');
   try {
     await loadCards();
+    if (errBox) errBox.hidden = true;
+    renderList();
+    return true;
   } catch (e) {
-    toast('Errore nell\'apertura dell\'archivio delle carte.', { ms: 5000 });
+    // Non mostrare "nessuna carta": le carte ci sono, solo non si riescono a leggere ora.
+    renderList();
+    $('#empty').hidden = true;
+    if (errBox) errBox.hidden = false;
+    return false;
   }
-  renderList();
+}
+
+function setupServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  // Quando arriva una versione nuova, la carica subito se si è nella schermata principale.
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded) return;
+    if (state.stack.length === 1 && $('#zoom').hidden) { reloaded = true; location.reload(); }
+  });
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+    .then(reg => { if (navigator.onLine) reg.update().catch(() => {}); })
+    .catch(() => {});
+}
+
+/* Se il telefono ha tenuto file di versioni diverse, li butta e ricarica
+   (una sola volta per sessione, e solo con internet). */
+function repairOnce() {
+  if (window.carteRepair) return window.carteRepair();
+  try { if (sessionStorage.getItem('carte-repair')) return false; sessionStorage.setItem('carte-repair', '1'); } catch (_) { return false; }
+  if (!navigator.onLine) return false;
+  const go = () => location.reload();
+  Promise.all([
+    window.caches ? caches.keys().then(k => Promise.all(k.map(x => caches.delete(x)))) : null,
+    navigator.serviceWorker ? navigator.serviceWorker.getRegistrations().then(r => Promise.all(r.map(x => x.update().catch(() => {})))) : null,
+  ]).then(go, go);
+  return true;
+}
+
+async function init() {
+  const mismatch = document.documentElement.dataset.version !== APP_VERSION;
+  if (mismatch && repairOnce()) return;
+  buildColorSwatches();
+  bind();
+  await refreshCards();
   updateStorageHint();
+  // Avvio riuscito: se servirà, la riparazione automatica potrà ripartire.
+  if (!mismatch) setTimeout(() => { try { sessionStorage.removeItem('carte-repair'); } catch (_) {} }, 3000);
 
   // Chiede al browser di non cancellare mai i dati.
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) {}
 
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  }
+  setupServiceWorker();
 }
 
-init();
+init().catch(err => {
+  // Se qualcosa va storto all'avvio, prova a sistemare da sola (una volta).
+  console.error(err);
+  if (!repairOnce()) {
+    toast('Qualcosa non va. Chiudi e riapri l\'app.', { ms: 8000 });
+  }
+});
