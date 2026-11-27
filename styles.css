@@ -379,3 +379,4 @@ svg { flex: none; }
 @media (min-width: 932px) { .hint-box { margin-left: auto; margin-right: auto; } }
 @media (prefers-color-scheme: dark) { .hint-box { background: #3a2f12; color: #ffe3a3; border-color: #6b5520; } }
 .load-error p { margin: 0 0 12px; }
+.version-note { text-align: center; margin: 14px 0 0; }

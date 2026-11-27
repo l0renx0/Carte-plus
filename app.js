@@ -1,7 +1,7 @@
 /* Carte+ — carte fedeltà offline. Tutto resta sul telefono (IndexedDB). */
 'use strict';
 
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.2.2';
 
 /* =========================================================
  * Archivio (IndexedDB)
@@ -811,6 +811,10 @@ function onNameInput() {
   $('#form-error').hidden = true;
 }
 
+function setVersionLabels() {
+  document.querySelectorAll('.app-version-label').forEach(el => { el.textContent = 'Carte+ versione ' + APP_VERSION; });
+}
+
 function openForm({ card = null, code = '', format = 'auto', fromScan = false, replace = false, photo } = {}) {
   state.editing = card;
   $('#form-title').textContent = card ? 'Modifica carta' : 'Nuova carta';
@@ -867,8 +871,10 @@ function updatePhotoPreview() {
   $('#f-photo-btn').textContent = src ? '📷 Cambia foto' : '📷 Aggiungi foto';
 }
 
+let saving = false;
 async function saveForm(ev) {
-  ev.preventDefault();
+  if (ev) ev.preventDefault();
+  if (saving) return;
   const name = $('#f-name').value.trim();
   const code = $('#f-code').value.trim();
   const err = $('#form-error');
@@ -894,7 +900,8 @@ async function saveForm(ev) {
     created: state.editing ? state.editing.created : now,
     updated: now,
   };
-  const btn = $('#btn-save');
+  const btn = $('#btn-save') || document.querySelector('#card-form [type=submit]') || document.createElement('button');
+  saving = true;
   btn.disabled = true;
   btn.textContent = 'Salvataggio…';
   try {
@@ -929,6 +936,7 @@ async function saveForm(ev) {
   } catch (e) {
     fail(`Errore nel salvataggio (${errText(e)}, v${APP_VERSION}).`);
   } finally {
+    saving = false;
     btn.disabled = false;
     btn.textContent = 'Salva carta';
   }
@@ -1110,55 +1118,63 @@ async function updateSettingsInfo() {
 /* =========================================================
  * Avvio
  * ======================================================= */
+/* Collega un evento senza mai bloccare l'app se un elemento manca. */
+function on(sel, ev, fn) {
+  const el = document.querySelector(sel);
+  if (el) el.addEventListener(ev, fn);
+  else console.warn('Elemento mancante:', sel);
+}
+
 function bind() {
   document.querySelectorAll('[data-back]').forEach(b => b.addEventListener('click', back));
-  $('#btn-add').addEventListener('click', () => { show('add'); Scanner.warmUp(); });
-  $('#btn-retry').addEventListener('click', async () => {
+  on('#btn-add', 'click', () => { show('add'); Scanner.warmUp(); });
+  on('#btn-retry', 'click', async () => {
     if (!(await refreshCards())) toast('Ancora niente. Chiudi del tutto l\'app e riaprila.', { ms: 6000 });
   });
-  $('#btn-settings').addEventListener('click', () => { show('settings'); updateSettingsInfo(); });
-  $('#search').addEventListener('input', renderList);
+  on('#btn-settings', 'click', () => { show('settings'); updateSettingsInfo(); });
+  on('#search', 'input', renderList);
 
   // Un solo gestore per tutte le carte dell'elenco.
-  $('#lists').addEventListener('click', e => {
+  on('#lists', 'click', e => {
     const t = e.target.closest('.card-tile');
     if (t) { vibrate(10); openCard(t.dataset.id); }
   });
 
-  $('#btn-scan-camera').addEventListener('click', startCameraScan);
-  $('#btn-scan-photo').addEventListener('click', () => $('#photo-input').click());
-  $('#photo-input').addEventListener('change', e => { scanFromPhoto(e.target.files[0]); e.target.value = ''; });
-  $('#btn-manual').addEventListener('click', () => openForm());
+  on('#btn-scan-camera', 'click', startCameraScan);
+  on('#btn-scan-photo', 'click', () => $('#photo-input').click());
+  on('#photo-input', 'change', e => { scanFromPhoto(e.target.files[0]); e.target.value = ''; });
+  on('#btn-manual', 'click', () => openForm());
 
-  $('#scan-cancel').addEventListener('click', back);
-  $('#scan-to-manual').addEventListener('click', () => { clearTimeout(startCameraScan._hint); openForm({ replace: true }); });
-  $('#btn-torch').addEventListener('click', async () => {
+  on('#scan-cancel', 'click', back);
+  on('#scan-to-manual', 'click', () => { clearTimeout(startCameraScan._hint); openForm({ replace: true }); });
+  on('#btn-torch', 'click', async () => {
     torchOn = !torchOn;
     const ok = await Scanner.torch(torchOn);
     if (!ok) { torchOn = false; toast('Torcia non disponibile.'); }
     $('#btn-torch').textContent = torchOn ? '🔦 Spegni torcia' : '🔦 Torcia';
   });
 
-  $('#card-form').addEventListener('submit', saveForm);
-  $('#f-name').addEventListener('input', onNameInput);
-  $('#f-code').addEventListener('input', () => { updateFormPreview(); $('#form-error').hidden = true; });
-  $('#f-format').addEventListener('change', updateFormPreview);
-  $('#f-photo-btn').addEventListener('click', () => $('#f-photo-input').click());
-  $('#f-photo-input').addEventListener('change', async e => {
+  on('#card-form', 'submit', saveForm);   // tasto Invio della tastiera
+  on('#btn-save', 'click', saveForm);      // tocco sul pulsante
+  on('#f-name', 'input', onNameInput);
+  on('#f-code', 'input', () => { updateFormPreview(); $('#form-error').hidden = true; });
+  on('#f-format', 'change', updateFormPreview);
+  on('#f-photo-btn', 'click', () => $('#f-photo-input').click());
+  on('#f-photo-input', 'change', async e => {
     const f = e.target.files[0];
     e.target.value = '';
     if (!f) return;
     try { state.formPhoto = await shrinkPhoto(f); updatePhotoPreview(); } catch (_) { toast('Foto non leggibile.'); }
   });
-  $('#f-photo-remove').addEventListener('click', () => { state.formPhoto = null; updatePhotoPreview(); });
+  on('#f-photo-remove', 'click', () => { state.formPhoto = null; updatePhotoPreview(); });
 
-  $('#btn-fav').addEventListener('click', toggleFav);
-  $('#btn-zoom').addEventListener('click', openZoom);
-  $('#show-barcode-btn').addEventListener('click', openZoom);
-  $('#zoom').addEventListener('click', closeZoom);
-  $('#btn-copy').addEventListener('click', copyCode);
-  $('#btn-edit').addEventListener('click', () => openForm({ card: state.current }));
-  $('#btn-delete').addEventListener('click', async () => {
+  on('#btn-fav', 'click', toggleFav);
+  on('#btn-zoom', 'click', openZoom);
+  on('#show-barcode-btn', 'click', openZoom);
+  on('#zoom', 'click', closeZoom);
+  on('#btn-copy', 'click', copyCode);
+  on('#btn-edit', 'click', () => openForm({ card: state.current }));
+  on('#btn-delete', 'click', async () => {
     const c = state.current;
     if (!c) return;
     if (!(await confirmDialog(`Eliminare la carta "${c.name}"?`))) return;
@@ -1181,16 +1197,16 @@ function bind() {
     });
   });
 
-  $('#btn-install').addEventListener('click', async () => {
+  on('#btn-install', 'click', async () => {
     if (!installPrompt) return;
     installPrompt.prompt();
     await installPrompt.userChoice.catch(() => {});
     installPrompt = null;
     updateInstallUI();
   });
-  $('#btn-export').addEventListener('click', exportBackup);
-  $('#btn-import').addEventListener('click', () => $('#import-input').click());
-  $('#import-input').addEventListener('change', e => { importBackup(e.target.files[0]); e.target.value = ''; });
+  on('#btn-export', 'click', exportBackup);
+  on('#btn-import', 'click', () => $('#import-input').click());
+  on('#import-input', 'change', e => { importBackup(e.target.files[0]); e.target.value = ''; });
 }
 
 /* Su iPhone, Safari e l'app sulla schermata Home hanno archivi SEPARATI:
@@ -1267,6 +1283,7 @@ async function init() {
   if (mismatch && repairOnce()) return;
   buildColorSwatches();
   bind();
+  setVersionLabels();
   await refreshCards();
   updateStorageHint();
   // Avvio riuscito: se servirà, la riparazione automatica potrà ripartire.
