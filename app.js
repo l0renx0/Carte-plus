@@ -1,7 +1,7 @@
 /* Carte+ — carte fedeltà offline. Tutto resta sul telefono (IndexedDB). */
 'use strict';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 
 /* =========================================================
  * Archivio (IndexedDB)
@@ -39,8 +39,18 @@ const DB = (() => {
           };
         }
       };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      req.onsuccess = () => {
+        const db = req.result;
+        // Se un'altra finestra dell'app (più nuova) deve aggiornare l'archivio, lasciala fare.
+        db.onversionchange = () => { db.close(); dbp = null; };
+        resolve(db);
+      };
+      req.onerror = () => { dbp = null; reject(req.error); };
+      // Un'altra finestra aperta con la versione vecchia blocca l'aggiornamento:
+      // i dati ci sono, basta chiuderla.
+      req.onblocked = () => {
+        toast('Chiudi le altre finestre di Carte+ aperte e riapri l\'app: le tue carte sono al sicuro.', { ms: 15000 });
+      };
     });
     return dbp;
   }
@@ -919,6 +929,7 @@ async function importBackup(file) {
     }
     await loadCards();
     renderList();
+    updateStorageHint();
     updateSettingsInfo();
     toast(n ? `Recuperate ${n} carte ✔` : 'Nessuna carta trovata nel file.');
   } catch (e) {
@@ -1050,6 +1061,24 @@ function bind() {
   $('#import-input').addEventListener('change', e => { importBackup(e.target.files[0]); e.target.value = ''; });
 }
 
+/* Su iPhone, Safari e l'app sulla schermata Home hanno archivi SEPARATI:
+   le carte salvate in uno non compaiono nell'altro. Lo spieghiamo chiaramente. */
+function isIOS() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+function updateStorageHint() {
+  const box = $('#storage-hint');
+  if (!box) return;
+  let html = '';
+  if (isIOS() && !isStandalone()) {
+    html = '<strong>Importante:</strong> stai usando Carte+ dentro Safari. Le carte salvate qui <strong>non compaiono</strong> nell\'app sulla schermata Home (e viceversa). Scegli un solo modo e usa sempre quello. Per spostare le carte: Impostazioni → <em>Salva copia</em>, poi nell\'altra <em>Recupera da copia</em>.';
+  } else if (isIOS() && isStandalone() && state.cards.length === 0) {
+    html = '<strong>Avevi già salvato delle carte aprendo il sito in Safari?</strong> Sono ancora lì: apri l\'indirizzo in Safari, vai in Impostazioni → <em>Salva copia</em>, poi qui tocca ⚙️ → <em>Recupera da copia</em>.';
+  }
+  box.innerHTML = html;
+  box.hidden = !html;
+}
+
 async function init() {
   buildColorSwatches();
   bind();
@@ -1059,6 +1088,7 @@ async function init() {
     toast('Errore nell\'apertura dell\'archivio delle carte.', { ms: 5000 });
   }
   renderList();
+  updateStorageHint();
 
   // Chiede al browser di non cancellare mai i dati.
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) {}

@@ -373,3 +373,8 @@ svg { flex: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* Avviso archivio separato (iPhone) */
+.hint-box { margin: 0 16px 12px; padding: 14px 16px; border-radius: 16px; background: #fff4d6; color: #5a4200; border: 1px solid #f0d58a; font-size: 17px; max-width: 868px; }
+@media (min-width: 932px) { .hint-box { margin-left: auto; margin-right: auto; } }
+@media (prefers-color-scheme: dark) { .hint-box { background: #3a2f12; color: #ffe3a3; border-color: #6b5520; } }
